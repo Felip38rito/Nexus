@@ -82,7 +82,7 @@ class Settings:
     ollama_api_key: str
     ollama_base_url: str = "https://ollama.com/v1"
     router_host: str = "127.0.0.1"
-    router_port: int = 8000
+    router_port: int = 9000
     default_tier: Tier = DEFAULT_TIER
     # Minimum combined message length before we bother classifying at all.
     # Below this, the request is treated as trivial (mini).
@@ -117,7 +117,7 @@ class Settings:
             ollama_api_key=key,
             ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "https://ollama.com/v1").rstrip("/"),
             router_host=os.environ.get("ROUTER_HOST", "127.0.0.1"),
-            router_port=int(os.environ.get("ROUTER_PORT", "8000")),
+            router_port=int(os.environ.get("ROUTER_PORT", "9000")),
             default_tier=Tier(os.environ.get("ROUTER_DEFAULT_TIER", DEFAULT_TIER.value)),
             min_classify_len=int(os.environ.get("ROUTER_MIN_CLASSIFY_LEN", "10")),
             require_auth=require_auth,

@@ -21,42 +21,42 @@ from typing import Any
 
 import httpx
 
-from .models import DEFAULT_TIER, Tier
+from .models import DEFAULT_TIER, RouterModels, Tier
 
 log = logging.getLogger("model_router.classify")
 
 # Explicit model override wins over everything: "use deepseek-v4-pro", etc.
 # This is the ONLY keyword-style match left — it targets specific model ids,
 # not generic difficulty words, so it can't false-positive on normal prose.
-_MODEL_OVERRIDE_RE = re.compile(
-    r"\b(deepseek-v4-pro|deepseek-v4-flash|kimi-k3|gemma4:31b|glm-5\.2|minimax-m3)\b",
-    re.IGNORECASE,
-)
+# The ids are built from the current model table so a YAML reconfiguration is
+# honored automatically instead of drifting out of sync.
+_OVERRIDE_WORDS_RE = re.compile(r"\b[a-z0-9_.:\-]+\b", re.IGNORECASE)
 
 
-def _explicit_override(prompt: str) -> Tier | None:
-    m = _MODEL_OVERRIDE_RE.search(prompt)
-    if not m:
-        return None
-    token = m.group(1).lower()
-    mapping = {
-        "deepseek-v4-pro": Tier.PRO,
-        "deepseek-v4-flash": Tier.AIR,
-        "kimi-k3": Tier.ULTRA,
-        "gemma4:31b": Tier.MINI,
-    }
-    # glm-5.2 / minimax-m3 are valid API ids but not routed tiers; treat as "ambiguous".
-    if token in ("glm-5.2", "minimax-m3"):
-        return None
-    return mapping.get(token)
+def _model_override(prompt: str, models: RouterModels) -> Tier | None:
+    # Map each tier's api id -> tier. Users reference the bare model name
+    # ("deepseek-v4-pro"), while the api id carries a version suffix
+    # ("deepseek-v4-pro:0813"), so both the full id and its base are matched.
+    # Only real model ids trigger an override — generic tier names ("pro"/"air")
+    # are NOT matched here, so normal prose containing those words can't
+    # accidentally pin a tier.
+    lookup: dict[str, Tier] = {}
+    for tier, spec in models.tiers.items():
+        lookup[spec.api_id.lower()] = tier
+        lookup[spec.api_id.split(":", 1)[0].lower()] = tier
+    for token in _OVERRIDE_WORDS_RE.findall(prompt):
+        tier = lookup.get(token.lower())
+        if tier is not None:
+            return tier
+    return None
 
 
-def deterministic_tier(prompt: str, min_classify_len: int = 10) -> Tier | None:
+def deterministic_tier(prompt: str, min_classify_len: int = 10, models: RouterModels | None = None) -> Tier | None:
     """Decide only the obvious cases; return None to defer to the LLM.
 
     Two deterministic decisions, nothing more:
 
-    1. Explicit model override — always wins, even for short prompts.
+    1. Explicit model/tier override — always wins, even for short prompts.
     2. Very short prompt (trivial chatter) — mini.
 
     Everything else returns None so the LLM makes the qualitative call. There
@@ -64,8 +64,10 @@ def deterministic_tier(prompt: str, min_classify_len: int = 10) -> Tier | None:
     words ("hi" inside "this"/"crashing", "lock" inside "block"/"clock") and
     routing prompts to the wrong tier.
     """
+    models = models or RouterModels()
+
     # 1. Explicit override wins over everything, including the length check.
-    override = _explicit_override(prompt)
+    override = _model_override(prompt, models)
     if override is not None:
         return override
 
@@ -152,7 +154,7 @@ async def classify(
 ) -> Tier:
     """Full hybrid path. Deterministic (override/trivial) first, LLM primary,
     default (air) last."""
-    det = deterministic_tier(prompt, settings.min_classify_len)
+    det = deterministic_tier(prompt, settings.min_classify_len, settings.models)
     if det is not None:
         return det
     llm = await llm_tier(

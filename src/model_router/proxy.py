@@ -6,15 +6,17 @@ and streams the completion back from Ollama Cloud under that tier's model id.
 from __future__ import annotations
 
 from typing import Any
-import datetime
+import hmac
+import logging
 import httpx
-from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from .classify import classify
 from .config import Settings
 from .models import Tier
+
+log = logging.getLogger("model_router.proxy")
 
 router = APIRouter()
 
@@ -58,8 +60,7 @@ def _auth_ok(settings: Settings, request: Request) -> bool:
         return True
     auth = request.headers.get("authorization", "")
     expected = f"Bearer {settings.require_auth}"
-    # constant-time-ish compare
-    return auth == expected
+    return hmac.compare_digest(auth, expected)
 
 
 @router.get("/v1/models")
@@ -139,20 +140,9 @@ async def chat_completions(request: Request):
 
     routed_model = settings.models.tiers[routed_tier].api_id
 
-    # LOGGING: Print to terminal first (guaranteed) then save to file
-    timestamp = datetime.datetime.now().isoformat()
+    # LOGGING (async-safe, via stdlib logging): terminal + rotating file.
     snippet = prompt[:50].replace("\n", " ") + "..."
-    
-    # Print to terminal immediately
-    print(f"\n📡 [Router] {routed_tier.value} ➔ {routed_model} | Prompt: {snippet}\n", flush=True)
-
-    try:
-        log_path = Path(settings.project_root) / "router.log"
-        log_entry = f"{timestamp} | Prompt: {snippet} | Tier: {routed_tier.value} | Model: {routed_model}\n"
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(log_entry)
-    except Exception:
-        pass # Don't break the proxy if file logging fails
+    log.info("Tier=%s Model=%s Prompt=%s", routed_tier.value, routed_model, snippet)
 
     # Build the upstream body: swap the model id but keep everything else.
     upstream_body = dict(body)
@@ -167,30 +157,37 @@ async def chat_completions(request: Request):
     stream = bool(body.get("stream", False))
     upstream_body["stream"] = stream
 
-    try:
+    # Shared client lives on app.state (created in lifespan). Fall back to a
+    # one-off client for callers/tests that bypass the lifespan; that one-off
+    # must be closed when the stream finishes (the shared client must NOT be).
+    upstream = getattr(request.app.state, "http_client", None)
+    own_client = upstream is None
+    if own_client:
         upstream = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0))
+
+    try:
         response = await upstream.post(target_url, headers=headers, json=upstream_body)
     except httpx.HTTPError as exc:
+        if own_client:
+            await upstream.aclose()
         raise HTTPException(status_code=502, detail=f"Upstream error: {exc}")
 
     if response.status_code >= 400:
         detail = response.text[:2000]
-        await upstream.aclose()
+        if own_client:
+            await upstream.aclose()
         raise HTTPException(status_code=response.status_code, detail=detail)
 
     async def passthrough():
-        if stream:
-            try:
+        try:
+            if stream:
                 async for chunk in response.aiter_bytes():
                     yield chunk
-            finally:
+            else:
+                yield response.content
+        finally:
+            if own_client:
                 await upstream.aclose()
-        else:
-            try:
-                content = response.content
-            finally:
-                await upstream.aclose()
-            yield content
 
     headers_out = {
         "X-Router-Model": routed_model,

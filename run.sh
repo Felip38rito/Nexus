@@ -16,4 +16,4 @@ fi
 export PYTHONPATH="${PYTHONPATH:-}:$SCRIPT_DIR/src"
 exec uv run uvicorn model_router.main:app \
   --host "${ROUTER_HOST:-127.0.0.1}" \
-  --port "${ROUTER_PORT:-8000}"
+  --port "${ROUTER_PORT:-9000}"

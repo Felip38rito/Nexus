@@ -66,7 +66,7 @@ answer quality, without wasting tokens on prompts that don't need it.
 git clone <your-repo> && cd model-router
 uv sync --extra dev
 cp .env.example .env        # fill in your provider key
-PYTHONPATH=src uv run uvicorn model_router.main:app --host 127.0.0.1 --port 8000
+PYTHONPATH=src uv run uvicorn model_router.main:app --host 127.0.0.1 --port 9000
 ```
 
 Tests:
@@ -82,7 +82,7 @@ uv run pytest
 | `OLLAMA_API_KEY` | — | upstream provider key (required) |
 | `OLLAMA_BASE_URL` | `https://ollama.com/v1` | provider `/v1` endpoint |
 | `ROUTER_HOST` | `127.0.0.1` | router bind address |
-| `ROUTER_PORT` | `8000` | router port |
+| `ROUTER_PORT` | `9000` | router port |
 | `ROUTER_DEFAULT_TIER` | `air` | last-resort fallback |
 | `ROUTER_MIN_CLASSIFY_LEN` | `10` | prompts shorter than this = trivial (`mini`) |
 | `ROUTER_API_KEY` | (empty) | if set, clients must send `Authorization: Bearer <key>` |
@@ -220,10 +220,10 @@ classifier:
 
 ```bash
 # List models
-curl http://127.0.0.1:8000/v1/models
+curl http://127.0.0.1:9000/v1/models
 
 # Chat (streaming) — note the x-router-model / x-router-tier headers
-curl http://127.0.0.1:8000/v1/chat/completions \
+curl http://127.0.0.1:9000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"adaptive","messages":[{"role":"user","content":"hello"}],"stream":true}'
 ```

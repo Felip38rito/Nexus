@@ -206,26 +206,24 @@ def _find_key_block(text: str, key: str, start: int = 0) -> tuple[int, int] | No
 def _find_provider_object(text: str, provider: str) -> tuple[int, int] | None:
     """Find the `"<provider>": { ... }` object inside a `"provider": {...}` map.
 
-    Returns (object_start, object_end). Locates the `"provider"` key, then the
-    `<provider>` key within it.
+    Returns (object_start, object_end). Locates the `"provider"` key, then
+    searches for the `<provider>` key scoped *inside* that object's span, so a
+    provider named like a top-level key elsewhere in the file can't collide.
     """
     prov_key = _find_key_block(text, "provider")
     if not prov_key:
         return None
-    _ps, pe = prov_key
-    inner = _find_key_block(text, provider, start=0)
+    pstart, pend = prov_key
+    # The provider object starts at the value's opening brace and ends at the
+    # matching closing brace (value_end already includes it).
+    inner = _find_key_block(text, provider, start=pstart)
     if not inner:
         return None
-    pstart, pend = inner
-    # ensure it is inside the provider object's span
-    if not (prov_key[0] <= pstart <= pe):
-        # search scoped inside provider object
-        obj_start = prov_key[1] - 1 if text[prov_key[1] - 1] in "}]" else prov_key[1]
-        inner2 = _find_key_block(text, provider, start=obj_start)
-        if inner2 is None:
-            return None
-        pstart, pend = inner2
-    return pstart, pend
+    istart, iend = inner
+    # Guard: the provider key must fall within the "provider" object span.
+    if istart < pstart or iend > pend:
+        return None
+    return istart, iend
 
 
 def _indent_of(text: str, idx: int) -> str:

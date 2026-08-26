@@ -104,3 +104,28 @@ def test_adaptive_kept_and_tiered():
     router = parsed["provider"]["router"]["models"]
     assert "adaptive" in router
     assert router["adaptive"]["name"] == "Adaptive (auto-tier)"
+
+
+def test_provider_key_scoped_inside_provider_object():
+    """Regression: a top-level `router` key (NOT the provider) must not be
+    mistaken for the provider object. The lookup must be scoped to the
+    `provider` object only."""
+    text = (
+        '{\n'
+        '  "model": "router/adaptive",\n'
+        '  "router": { "enabled": true, "warmup": 0 },\n'
+        '  "provider": {\n'
+        '    "router": {\n'
+        '      "npm": "@ai-sdk/openai-compatible",\n'
+        '      "models": { "adaptive": { "name": "Adaptive" } }\n'
+        '    }\n'
+        '  }\n'
+        '}\n'
+    )
+    new_text, changed, _ = _run(text)
+    assert changed is True
+    parsed = m.parse_jsonc(new_text)
+    # The unrelated top-level "router" key must be preserved untouched.
+    assert parsed["router"] == {"enabled": True, "warmup": 0}
+    # And the provider's models updated to the full tier set.
+    assert set(parsed["provider"]["router"]["models"]) == {"adaptive", "mini", "air", "pro", "ultra"}
