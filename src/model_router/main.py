@@ -24,6 +24,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             project_root / ".env",
             default_models_yaml=project_root / "router.models.yaml",
         )
+        settings.project_root = project_root
 
     app.state.settings = settings
     app.include_router(proxy_router)

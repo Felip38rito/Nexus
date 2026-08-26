@@ -91,6 +91,8 @@ class Settings:
     require_auth: str = ""
     # Mounted model table + classifier config (from YAML or defaults).
     models: RouterModels = field(default_factory=RouterModels)
+    # Where router.log is written. Set by create_app; defaults to the repo root.
+    project_root: Path = field(default_factory=lambda: Path.cwd())
 
     @classmethod
     def from_env(
