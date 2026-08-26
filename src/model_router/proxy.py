@@ -14,12 +14,21 @@ from fastapi.responses import StreamingResponse
 
 from .classify import classify
 from .config import Settings
+from .models import Tier
 
 router = APIRouter()
 
 
 def _model_list_payload(models: "RouterModels") -> dict[str, Any]:
-    # "adaptive" is a virtual model id — always triggers classification.
+    """Advertise the virtual + tier model ids the router understands.
+
+    The list IS the source of truth for what clients (e.g. the Hermes picker)
+    may select. It exposes:
+    - "adaptive"  -> the router decides the tier automatically.
+    - mini/air/pro/ultra -> transparently force that tier.
+    (The raw upstream api ids still work if sent directly, but they are not
+    advertised so the picker stays clean and tier-oriented.)
+    """
     data = [
         {
             "id": "adaptive",
@@ -28,13 +37,17 @@ def _model_list_payload(models: "RouterModels") -> dict[str, Any]:
             "owned_by": "model-router",
         }
     ]
-    for spec in models.tiers.values():
+    for tier in Tier:
+        spec = models.tiers[tier]
         data.append(
             {
-                "id": spec.api_id,
+                "id": tier.value,
                 "object": "model",
                 "created": 0,
-                "owned_by": "ollama-cloud",
+                "owned_by": "model-router",
+                # "tier" metadata lets pickers group by tier without another probe.
+                "tier": tier.value,
+                "model": spec.api_id,
             }
         )
     return {"object": "list", "data": data}
@@ -109,9 +122,16 @@ async def chat_completions(request: Request):
         prompt = "\n".join(parts)
 
     # Transparent mode: if the client explicitly requested one of OUR tiers'
-    # api ids, honor it directly instead of re-classifying.
+    # api ids (raw upstream id OR a tier name like "mini"/"air"/"pro"/"ultra"),
+    # honor it directly instead of re-classifying.
     requested_model = body.get("model", "")
     known_tier = settings.models.tier_for_api_id(requested_model)
+    if known_tier is None:
+        # Tier-name override ("mini", "air", "pro", "ultra") — force that tier.
+        try:
+            known_tier = Tier(requested_model)
+        except ValueError:
+            known_tier = None
     if known_tier is not None:
         routed_tier = known_tier
     else:

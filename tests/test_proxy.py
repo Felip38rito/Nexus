@@ -27,7 +27,14 @@ def test_list_models(client: TestClient):
     assert r.status_code == 200
     data = r.json()["data"]
     ids = {m["id"] for m in data}
-    assert ids == {"adaptive", "gemma4:31b", "deepseek-v4-flash:0731", "deepseek-v4-pro:0813", "kimi-k3"}
+    # The router advertises the tier names (source of truth for pickers), not
+    # the raw upstream api ids.
+    assert ids == {"adaptive", "mini", "air", "pro", "ultra"}
+    # Each tier row also carries the upstream model + tier metadata.
+    by_id = {m["id"]: m for m in data}
+    assert by_id["mini"]["model"] == "gemma4:31b"
+    assert by_id["air"]["model"] == "deepseek-v4-flash:0731"
+    assert by_id["pro"]["tier"] == "pro"
 
 
 def test_adaptive_always_classifies(client: TestClient, monkeypatch):
@@ -271,9 +278,14 @@ def test_custom_models_yaml_drives_proxy(tmp_path, monkeypatch):
     )
     client = TestClient(_make_app(settings))
 
-    # /v1/models reflects the custom table.
-    ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
-    assert ids == {"adaptive", "my-mini", "my-air", "my-pro", "my-ultra"}
+    # /v1/models always advertises the tier names (source of truth); the
+    # custom upstream ids are exposed via each row's "model" metadata.
+    data = client.get("/v1/models").json()["data"]
+    ids = {m["id"] for m in data}
+    assert ids == {"adaptive", "mini", "air", "pro", "ultra"}
+    by_id = {m["id"]: m for m in data}
+    assert by_id["mini"]["model"] == "my-mini"
+    assert by_id["ultra"]["model"] == "my-ultra"
 
     # A trivial prompt routes to the custom mini model.
     seen = {}
