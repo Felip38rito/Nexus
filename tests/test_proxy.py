@@ -27,7 +27,32 @@ def test_list_models(client: TestClient):
     assert r.status_code == 200
     data = r.json()["data"]
     ids = {m["id"] for m in data}
-    assert ids == {"gemma4:31b", "deepseek-v4-flash:0731", "glm-5.2", "deepseek-v4-pro:0813"}
+    assert ids == {"adaptive", "gemma4:31b", "deepseek-v4-flash:0731", "glm-5.2", "deepseek-v4-pro:0813"}
+
+
+def test_adaptive_always_classifies(client: TestClient, monkeypatch):
+    """'adaptive' is a virtual id — must always trigger classification, never passthrough."""
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        json_body = kw["json"]
+        seen["model"] = json_body["model"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    # Trivial prompt with model="adaptive" should classify to mini, not passthrough.
+    payload = {
+        "model": "adaptive",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    r = client.post("/v1/chat/completions", json=payload)
+    assert r.status_code == 200
+    assert seen["model"] == "gemma4:31b"
+    assert r.headers["X-Router-Tier"] == "mini"
 
 
 def test_chat_completion_routes_and_streams(client: TestClient, monkeypatch):
@@ -82,6 +107,47 @@ def test_chat_completion_trivial_routes_to_mini(client: TestClient, monkeypatch)
     assert r.status_code == 200
     assert seen["model"] == "gemma4:31b"
     assert r.headers["X-Router-Tier"] == "mini"
+
+
+def test_system_prompt_keywords_do_not_poison_classification(client: TestClient, monkeypatch):
+    """The Hermes system prompt is full of pro/pro-max keywords (analyze,
+    codebase, concurrency, lock, auth, performance, race condition, ...). It must
+    NOT feed the classifier — only the user's intent should drive the tier.
+    Regression: previously ALL messages were concatenated, so every request with
+    the Hermes system prompt saturated the deterministic rules and routed to pro."""
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        json_body = kw["json"]
+        seen["model"] = json_body["model"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    system_prompt = (
+        "You are Hermes Agent. You assist with analyzing information, writing and "
+        "editing code, concurrency, lock-free queues, auth, performance and latency "
+        "analysis, kernel modules, race conditions, codebase reviews, memory leaks, "
+        "and running git commands. Analyze, evaluate and assess. Use lock and auth. "
+    )
+    payload = {
+        "model": "anything",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "fala aliado, na escuta?"},
+        ],
+    }
+    r = client.post("/v1/chat/completions", json=payload)
+    assert r.status_code == 200
+    # The trivial user message must NOT be dragged up to pro by system keywords.
+    # "fala aliado, na escuta?" is ambiguous (len>min_classify_len) -> LLM fallback
+    # (fails on stub) -> default air. Crucially it must NOT be pro/pro-max.
+    assert r.headers["X-Router-Tier"] in {"air", "mini"}
+    assert seen["model"] in {"deepseek-v4-flash:0731", "gemma4:31b"}
 
 
 def test_transparent_known_model_passthrough(client: TestClient, monkeypatch):
@@ -171,7 +237,7 @@ def test_custom_models_yaml_drives_proxy(tmp_path, monkeypatch):
 
     # /v1/models reflects the custom table.
     ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
-    assert ids == {"my-mini", "my-air", "my-pro", "my-promax"}
+    assert ids == {"adaptive", "my-mini", "my-air", "my-pro", "my-promax"}
 
     # A trivial prompt routes to the custom mini model.
     seen = {}

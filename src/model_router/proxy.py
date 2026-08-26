@@ -6,8 +6,9 @@ and streams the completion back from Ollama Cloud under that tier's model id.
 from __future__ import annotations
 
 from typing import Any
-
+import datetime
 import httpx
+from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -18,15 +19,24 @@ router = APIRouter()
 
 
 def _model_list_payload(models: "RouterModels") -> dict[str, Any]:
+    # "adaptive" is a virtual model id — always triggers classification.
     data = [
         {
-            "id": spec.api_id,
+            "id": "adaptive",
             "object": "model",
             "created": 0,
-            "owned_by": "ollama-cloud",
+            "owned_by": "model-router",
         }
-        for spec in models.tiers.values()
     ]
+    for spec in models.tiers.values():
+        data.append(
+            {
+                "id": spec.api_id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "ollama-cloud",
+            }
+        )
     return {"object": "list", "data": data}
 
 
@@ -62,9 +72,17 @@ async def chat_completions(request: Request):
     if not isinstance(messages, list) or not messages:
         raise HTTPException(status_code=400, detail="'messages' must be a non-empty list")
 
-    # Concatenate text content for the classifier.
+    # Concatenate ONLY the user messages for the classifier. The system prompt
+    # (Hermes' giant "You are Hermes Agent..." block) and assistant/tool history
+    # are packed with pro/pro-max keywords (analyze, codebase, concurrency,
+    # lock, auth, performance, race condition, ...) that would saturate the
+    # deterministic classifier and route every request to pro/pro-max. Only the
+    # user's actual intent should drive the tier. Fall back to all messages if
+    # there's no user message at all (defensive edge case).
     parts: list[str] = []
     for msg in messages:
+        if msg.get("role") != "user":
+            continue
         content = msg.get("content")
         if isinstance(content, str):
             parts.append(content)
@@ -72,6 +90,11 @@ async def chat_completions(request: Request):
             for c in content:
                 if isinstance(c, dict) and c.get("type") == "text":
                     parts.append(str(c.get("text", "")))
+    if not parts:
+        for msg in messages:
+            content = msg.get("content")
+            if isinstance(content, str):
+                parts.append(content)
     prompt = "\n".join(parts)
 
     # Transparent mode: if the client explicitly requested one of OUR tiers'
@@ -84,6 +107,21 @@ async def chat_completions(request: Request):
         routed_tier = await classify(prompt, settings)
 
     routed_model = settings.models.tiers[routed_tier].api_id
+
+    # LOGGING: Print to terminal first (guaranteed) then save to file
+    timestamp = datetime.datetime.now().isoformat()
+    snippet = prompt[:50].replace("\n", " ") + "..."
+    
+    # Print to terminal immediately
+    print(f"\n📡 [Router] {routed_tier.value} ➔ {routed_model} | Prompt: {snippet}\n", flush=True)
+
+    try:
+        log_path = Path(settings.project_root) / "router.log"
+        log_entry = f"{timestamp} | Prompt: {snippet} | Tier: {routed_tier.value} | Model: {routed_model}\n"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(log_entry)
+    except Exception:
+        pass # Don't break the proxy if file logging fails
 
     # Build the upstream body: swap the model id but keep everything else.
     upstream_body = dict(body)
