@@ -297,6 +297,59 @@ hermes config set model.aliases.ultra router/ultra
 > through it. To undo, restore the previous provider:
 > `hermes config set model.provider ollama-cloud` (or whichever you used).
 
+### Syncing the tiers into OpenCode
+
+Unlike Hermes, **OpenCode does not auto-discover models** for custom
+OpenAI-compatible providers (it requires a statically declared `models` block
+per provider — see [anomalyco/opencode#27553](https://github.com/anomalyco/opencode/issues/27553)).
+So the router can't be a *live* source of truth for OpenCode the way it is for
+Hermes. Instead, keep the router as the single place that defines the tiers and
+push a **snapshot** of its list into OpenCode with `sync-opencode.py`.
+
+The script:
+- Reads the tiers advertised by the router (`GET /v1/models`) — **the router
+  stays the source of truth**.
+- Rewrites **only** the `models` block of the `router` provider in your
+  `opencode.json(c)`. Everything else (other providers, top-level keys, the
+  `router` provider's `npm`/`name`/`options`) is preserved byte-for-byte.
+- Backs up the config before writing (timestamped `.bak-<timestamp>` next to
+  it), so it is **non-destructive** — your user config is never deleted.
+
+```bash
+# List the tiers the router currently advertises (requires the router running)
+python3 sync-opencode.py --dry-run
+
+# Write them into ~/.config/opencode/opencode.jsonc (default config)
+python3 sync-opencode.py
+
+# Target a different config and/or router
+python3 sync-opencode.py --config /path/to/opencode.json --router-url http://127.0.0.1:9000/v1
+```
+
+Options:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config` | `~/.config/opencode/opencode.jsonc` | OpenCode config to update |
+| `--router-url` | `http://127.0.0.1:9000/v1` | Nexus router base URL |
+| `--dry-run` | off | Show what would change without writing |
+
+> **How to configure the tiers (mini/air/pro/ultra):** the tier *names* come
+> straight from the router's `/v1/models` (edit `router.models.yaml` — see
+> [Model configuration](#model-configuration-yaml) — then restart with
+> `routerctl.sh restart`). Re-run the sync and the OpenCode provider updates to
+> match. If the router advertises a new tier, it appears; if one is removed,
+> it disappears from the OpenCode provider too.
+
+> **How to run it correctly:** the router must be up (`routerctl.sh status`)
+> before syncing. If it's down, the script fails fast with a clear message and
+> leaves your config untouched. To keep OpenCode always in step, run the sync
+> after every router restart (or whenever you change `router.models.yaml`).
+
+> **Non-destructive guarantee:** the script only ever replaces the `models`
+> value inside the `router` provider. It never deletes other providers or other
+> keys in your config, and it always leaves a backup before the first write.
+
 ### OpenCode
 
 Add a `router` provider in `~/.config/opencode/opencode.jsonc`:
@@ -326,6 +379,10 @@ Add a `router` provider in `~/.config/opencode/opencode.jsonc`:
 
 > The router doesn't require auth by default, so `apiKey` can be any non-empty
 > value. If you enable `ROUTER_API_KEY`, replace it with the real value.
+>
+> **Tip:** don't hand-edit this block — run `sync-opencode.py` (see
+> [Syncing the tiers into OpenCode](#syncing-the-tiers-into-opencode)) so the
+> model list always matches what the router advertises.
 
 ## Running as a service (launchd — macOS)
 
