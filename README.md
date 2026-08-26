@@ -12,9 +12,12 @@ Mora em `~/Developer/model-router/`, fora do repo Aura.
 
 1. Cliente (Hermes, OpenCode, curl, qualquer OpenAI SDK) aponta `base_url` pro router.
 2. Router lê o prompt e classifica a dificuldade (classificador **híbrido**):
-   - **Regras determinísticas** de keyword rodam primeiro (grátis, instantâneo).
-   - **Fallback LLM** só em caso ambíguo: `gemma4:31b` retorna JSON estrito.
-   - **Fail-safe**: erro → default `air`. Nunca quebra o request.
+   - **Determinístico** só para óbvios: override explícito de modelo ("use
+     deepseek-v4-pro") e chatter trivial (saudações/curtos). Instantâneo, grátis.
+   - **LLM primário** para todo o resto: `gemma4:31b` retorna JSON estrito com a
+     decisão qualitativa de tier. A decisão de tier é fundamentalmente
+     qualitativa (intenção, escopo, contexto) — keyword matching não captura isso.
+   - **Fail-safe**: erro do LLM → default `air`. Nunca quebra o request.
 3. Router repassa pro modelo escolhido e faz streaming da resposta.
    - Headers: `X-Router-Model` (id do modelo) e `X-Router-Tier` (mini/air/pro/pro-max).
 
@@ -74,7 +77,7 @@ Repare no header `x-router-model`/`x-router-tier` na resposta.
 | `ROUTER_HOST` | `127.0.0.1` | bind do router |
 | `ROUTER_PORT` | `8000` | porta do router |
 | `ROUTER_DEFAULT_TIER` | `air` | fallback de último recurso |
-| `ROUTER_MIN_CLASSIFY_LEN` | `20` | prompts menores que isso = triviais (`mini`) |
+| `ROUTER_MIN_CLASSIFY_LEN` | `10` | prompts menores que isso = triviais (`mini`) |
 | `ROUTER_API_KEY` | (vazio) | se setar, cliente precisa mandar `Authorization: Bearer <chave>` |
 | `ROUTER_MODELS_YAML` | `router.models.yaml` | caminho pra um YAML de modelos customizado |
 
@@ -99,8 +102,8 @@ tiers:
     model: deepseek-v4-pro:0813
     description: "raw coding power"
 classifier:
-  model: gemma4:31b             # modelo usado no fallback LLM (JSON de decisão)
-  min_classify_len: 20          # prompts menores que isso = triviais (mini)
+  model: gemma4:31b             # LLM decisor primário (JSON de decisão)
+  min_classify_len: 10          # prompts menores que isso = triviais (mini)
 ```
 
 Os 4 tiers (mini/air/pro/pro-max) são fixos — só os modelos/descrições mudam.
@@ -119,7 +122,7 @@ Opcional e não muda o config do usuário por padrão.
 
 ## Testes / verificação
 
-- 22 testes unitários (`classify`, `config`, `proxy`) com MockTransport.
+- 32 testes unitários (`classify`, `config`, `proxy`) com MockTransport.
 - Smoke real contra a Ollama Cloud validado 2026-08-25 (ver `Model Router.md` no vault).
 
 ## Próximos passos / ideias
