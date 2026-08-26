@@ -27,7 +27,7 @@ def test_list_models(client: TestClient):
     assert r.status_code == 200
     data = r.json()["data"]
     ids = {m["id"] for m in data}
-    assert ids == {"adaptive", "gemma4:31b", "deepseek-v4-flash:0731", "glm-5.2", "deepseek-v4-pro:0813"}
+    assert ids == {"adaptive", "gemma4:31b", "deepseek-v4-flash:0731", "deepseek-v4-pro:0813", "kimi-k3"}
 
 
 def test_adaptive_always_classifies(client: TestClient, monkeypatch):
@@ -81,7 +81,7 @@ def test_chat_completion_routes_and_streams(client: TestClient, monkeypatch):
     assert r.status_code == 200
     # routed model header set (this prompt is ambiguous -> LLM fallback would
     # be invoked, but we stub post so it returns None -> default air)
-    assert r.headers["X-Router-Model"] in {"gemma4:31b", "deepseek-v4-flash:0731", "glm-5.2", "deepseek-v4-pro:0813"}
+    assert r.headers["X-Router-Model"] in {"gemma4:31b", "deepseek-v4-flash:0731", "deepseek-v4-pro:0813", "kimi-k3"}
     assert "text/event-stream" in r.headers["content-type"]
     assert "data: " in r.text
 
@@ -110,7 +110,7 @@ def test_chat_completion_trivial_routes_to_mini(client: TestClient, monkeypatch)
 
 
 def test_system_prompt_keywords_do_not_poison_classification(client: TestClient, monkeypatch):
-    """The Hermes system prompt is full of pro/pro-max keywords (analyze,
+    """The Hermes system prompt is full of pro/ultra keywords (analyze,
     codebase, concurrency, lock, auth, performance, race condition, ...). It must
     NOT feed the classifier — only the user's intent should drive the tier.
     Regression: previously ALL messages were concatenated, so every request with
@@ -145,7 +145,7 @@ def test_system_prompt_keywords_do_not_poison_classification(client: TestClient,
     assert r.status_code == 200
     # The trivial user message must NOT be dragged up to pro by system keywords.
     # "fala aliado, na escuta?" is ambiguous (len>min_classify_len) -> LLM fallback
-    # (fails on stub) -> default air. Crucially it must NOT be pro/pro-max.
+    # (fails on stub) -> default air. Crucially it must NOT be pro/ultra.
     assert r.headers["X-Router-Tier"] in {"air", "mini"}
     assert seen["model"] in {"deepseek-v4-flash:0731", "gemma4:31b"}
 
@@ -153,10 +153,10 @@ def test_system_prompt_keywords_do_not_poison_classification(client: TestClient,
 def test_long_history_does_not_saturate_tier(client: TestClient, monkeypatch):
     """Regression: concatenating ALL user messages means a long technical
     conversation grows the classifier prompt, so even a trivial follow-up
-    ("obrigado!") gets routed to pro/pro-max. The fix: classify ONLY the last
+    ("obrigado!") gets routed to pro/ultra. The fix: classify ONLY the last
     user message. This test sends a conversation with several complex user
     messages followed by a trivial last message — the router must NOT route to
-    pro/pro-max."""
+    pro/ultra."""
     seen = {}
 
     async def fake_post(self, url, headers, **kw):
@@ -256,8 +256,8 @@ def test_custom_models_yaml_drives_proxy(tmp_path, monkeypatch):
         "  pro:\n"
         "    model: my-pro\n"
         "    description: \"reasoning\"\n"
-        "  pro-max:\n"
-        "    model: my-promax\n"
+        "  ultra:\n"
+        "    model: my-ultra\n"
         "    description: \"hard\"\n"
         "classifier:\n"
         "  model: my-classifier\n"
@@ -273,7 +273,7 @@ def test_custom_models_yaml_drives_proxy(tmp_path, monkeypatch):
 
     # /v1/models reflects the custom table.
     ids = {m["id"] for m in client.get("/v1/models").json()["data"]}
-    assert ids == {"adaptive", "my-mini", "my-air", "my-pro", "my-promax"}
+    assert ids == {"adaptive", "my-mini", "my-air", "my-pro", "my-ultra"}
 
     # A trivial prompt routes to the custom mini model.
     seen = {}

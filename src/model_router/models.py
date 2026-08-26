@@ -15,7 +15,7 @@ class Tier(str, Enum):
     MINI = "mini"
     AIR = "air"
     PRO = "pro"
-    PRO_MAX = "pro-max"
+    ULTRA = "ultra"
 
 
 @dataclass(frozen=True)
@@ -28,8 +28,8 @@ class ModelSpec:
 _DEFAULT_TABLE: dict[Tier, ModelSpec] = {
     Tier.MINI: ModelSpec("gemma4:31b", "fast/cheap — discussion + trivial/mechanical tasks"),
     Tier.AIR: ModelSpec("deepseek-v4-flash:0731", "default — day-to-day implementation"),
-    Tier.PRO: ModelSpec("glm-5.2", "frontier reasoning, complex/ambiguous design"),
-    Tier.PRO_MAX: ModelSpec("deepseek-v4-pro:0813", "raw coding power, hard debugging/refactors"),
+    Tier.PRO: ModelSpec("deepseek-v4-pro:0813", "raw coding power, hard debugging/refactors"),
+    Tier.ULTRA: ModelSpec("kimi-k3", "deep synthesis, whole-architecture, adversarial analysis"),
 }
 
 DEFAULT_TIER = Tier.AIR

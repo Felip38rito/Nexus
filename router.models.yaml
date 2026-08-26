@@ -10,7 +10,7 @@
 # Tier padrão quando o classificador falha ou não decide.
 default_tier: air
 
-# Tiers fixos (mini/air/pro/pro-max). Cada tier tem o modelo e uma descrição.
+# Tiers fixos (mini/air/pro/ultra). Cada tier tem o modelo e uma descrição.
 tiers:
   mini:
     model: gemma4:31b
@@ -19,11 +19,11 @@ tiers:
     model: deepseek-v4-flash:0731
     description: "default - day-to-day implementation"
   pro:
-    model: glm-5.2
-    description: "frontier reasoning, complex/ambiguous design"
-  pro-max:
     model: deepseek-v4-pro:0813
     description: "raw coding power, hard debugging/refactors"
+  ultra:
+    model: kimi-k3
+    description: "deep synthesis, whole-architecture, adversarial analysis"
 
 # Classificador.
 # - classifier_model: modelo usado na decisão qualitativa (JSON). É o decisor

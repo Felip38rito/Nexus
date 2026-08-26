@@ -29,7 +29,7 @@ log = logging.getLogger("model_router.classify")
 # This is the ONLY keyword-style match left — it targets specific model ids,
 # not generic difficulty words, so it can't false-positive on normal prose.
 _MODEL_OVERRIDE_RE = re.compile(
-    r"\b(deepseek-v4-pro|deepseek-v4-flash|glm-5\.2|gemma4:31b|minimax-m3|kimi-k3)\b",
+    r"\b(deepseek-v4-pro|deepseek-v4-flash|kimi-k3|gemma4:31b|glm-5\.2|minimax-m3)\b",
     re.IGNORECASE,
 )
 
@@ -40,13 +40,13 @@ def _explicit_override(prompt: str) -> Tier | None:
         return None
     token = m.group(1).lower()
     mapping = {
-        "deepseek-v4-pro": Tier.PRO_MAX,
+        "deepseek-v4-pro": Tier.PRO,
         "deepseek-v4-flash": Tier.AIR,
-        "glm-5.2": Tier.PRO,
+        "kimi-k3": Tier.ULTRA,
         "gemma4:31b": Tier.MINI,
     }
-    # kimi / minimax are valid API ids but not routed tiers; treat as "ambiguous".
-    if token in ("minimax-m3", "kimi-k3"):
+    # glm-5.2 / minimax-m3 are valid API ids but not routed tiers; treat as "ambiguous".
+    if token in ("glm-5.2", "minimax-m3"):
         return None
     return mapping.get(token)
 
@@ -79,23 +79,23 @@ def deterministic_tier(prompt: str, min_classify_len: int = 10) -> Tier | None:
 
 LLM_SYSTEM = """You are a model router. Pick the most appropriate Ollama Cloud model tier for the user's request.
 
-Reply with ONLY a single JSON object, no commentary, of the form {"model": "mini|air|pro|pro-max", "reason": "<short>"}.
+Reply with ONLY a single JSON object, no commentary, of the form {"model": "mini|air|pro|ultra", "reason": "<short>"}.
 
 Tier definitions:
 - mini   = trivial/mechanical/short chat, yes-no questions, simple lookups.
 - air    = normal day-to-day implementation, straightforward coding, single-file edits.
-- pro    = complex reasoning, architecture analysis, codebase review, ambiguous design, concurrency, public API design, multi-file impact assessment. Also: any request asking to "analyze", "evaluate", "assess", "review", or "improve" a project/codebase/system.
-- pro-max = hardest debugging, large-scale refactors, whole-architecture decisions, reverse-engineering, adversarial analysis, anything requiring deep synthesis across many files.
+- pro    = complex coding, hard debugging, refactors, multi-file impact, architecture analysis, codebase review, concurrency, public API design. Also: any request asking to "analyze", "evaluate", "assess", "review", or "improve" a project/codebase/system.
+- ultra  = hardest problems, whole-architecture decisions, deep synthesis across many files, reverse-engineering, adversarial analysis, anything requiring maximum reasoning depth.
 
-Think about what EXECUTING the request would require (reading many files, cross-referencing, deep reasoning) — not just the surface text. A short prompt like "analyze the whole project" implies reading dozens of files and synthesizing — that is pro or pro-max, not mini.
+Think about what EXECUTING the request would require (reading many files, cross-referencing, deep reasoning) — not just the surface text. A short prompt like "analyze the whole project" implies reading dozens of files and synthesizing — that is pro or ultra, not mini.
 
 Examples:
 {"model": "mini", "reason": "simple greeting"}
 {"model": "air", "reason": "straightforward single-file edit"}
-{"model": "pro", "reason": "analyzes project architecture, requires multi-file reasoning"}
+{"model": "pro", "reason": "hard debugging, multi-file refactor needed"}
 {"model": "pro", "reason": "avaliação de codebase inteira, reasoning complexo"}
-{"model": "pro-max", "reason": "whole-codebase refactor, deep synthesis required"}
-{"model": "pro", "reason": "revisar e melhorar o projeto, múltiplos módulos envolvidos"}"""
+{"model": "ultra", "reason": "whole-codebase refactor, deep synthesis required"}
+{"model": "ultra", "reason": "revisar e melhorar o projeto, múltiplos módulos envolvidos"}"""
 
 
 async def llm_tier(

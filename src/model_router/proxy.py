@@ -74,11 +74,11 @@ async def chat_completions(request: Request):
 
     # Classify ONLY the LAST user message — the user's current intent. The
     # system prompt (Hermes' giant "You are Hermes Agent..." block) and
-    # assistant/tool history are packed with pro/pro-max keywords (analyze,
+    # assistant/tool history are packed with pro/ultra keywords (analyze,
     # codebase, concurrency, lock, auth, performance, race condition, ...) that
     # would saturate the classifier. And concatenating ALL user messages from
     # the conversation means the classifier prompt grows over time, so a long
-    # technical chat saturates the tier to pro/pro-max even when the current
+    # technical chat saturates the tier to pro/ultra even when the current
     # request is trivial. Using only the last user message keeps the tier
     # decision anchored to what the user is asking RIGHT NOW. Fall back to all
     # messages if there's no user message at all (defensive edge case).

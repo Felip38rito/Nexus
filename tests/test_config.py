@@ -9,7 +9,7 @@ from model_router.models import MODEL_TABLE, Tier, tier_for_api_id
 
 
 def test_tier_table_has_all_tiers():
-    assert set(MODEL_TABLE.keys()) == {Tier.MINI, Tier.AIR, Tier.PRO, Tier.PRO_MAX}
+    assert set(MODEL_TABLE.keys()) == {Tier.MINI, Tier.AIR, Tier.PRO, Tier.ULTRA}
 
 
 def test_api_ids_are_not_cloud_suffixed():
@@ -56,10 +56,10 @@ tiers:
     model: deepseek-v4-flash:0731
     description: "default"
   pro:
-    model: glm-5.2
-    description: "complex"
-  pro-max:
     model: deepseek-v4-pro:0813
+    description: "complex"
+  ultra:
+    model: kimi-k3
     description: "hard"
 classifier:
   model: gemma4:31b
@@ -86,7 +86,7 @@ def test_load_models_yaml_unknown_tier_raises(tmp_path: Path):
     yaml_path = tmp_path / "bad.yaml"
     yaml_path.write_text(
         "tiers:\n  bogus:\n    model: x\n  air:\n    model: y\n"
-        "  pro:\n    model: z\n  pro-max:\n    model: w\n  mini:\n    model: m\n"
+        "  pro:\n    model: z\n  ultra:\n    model: w\n  mini:\n    model: m\n"
     )
     with pytest.raises(ValueError, match="Unknown tier"):
         load_models_yaml(yaml_path)
@@ -96,7 +96,7 @@ def test_load_models_yaml_missing_tier_raises(tmp_path: Path):
     yaml_path = tmp_path / "bad2.yaml"
     # Omit the "pro" tier entirely.
     yaml_path.write_text(
-        "tiers:\n  air:\n    model: y\n  pro-max:\n    model: w\n  mini:\n    model: m\n"
+        "tiers:\n  air:\n    model: y\n  ultra:\n    model: w\n  mini:\n    model: m\n"
     )
     with pytest.raises(ValueError, match="Missing tier"):
         load_models_yaml(yaml_path)
@@ -110,4 +110,5 @@ def test_settings_from_env_loads_yaml(monkeypatch, tmp_path: Path):
     env.write_text("OLLAMA_API_KEY=secret\n")
     s = Settings.from_env(env, default_models_yaml=yaml_path)
     assert s.models.min_classify_len == 40
-    assert s.models.tiers[Tier.PRO].api_id == "glm-5.2"
+    assert s.models.tiers[Tier.PRO].api_id == "deepseek-v4-pro:0813"
+    assert s.models.tiers[Tier.ULTRA].api_id == "kimi-k3"

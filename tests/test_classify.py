@@ -23,21 +23,28 @@ def test_short_greetings_mini():
 
 
 def test_explicit_override_wins():
-    assert deterministic_tier("use deepseek-v4-pro for this", min_classify_len=10) == Tier.PRO_MAX
+    assert deterministic_tier("use deepseek-v4-pro for this", min_classify_len=10) == Tier.PRO
     assert deterministic_tier("run gemma4:31b on this", min_classify_len=10) == Tier.MINI
-    assert deterministic_tier("use glm-5.2", min_classify_len=10) == Tier.PRO
+    assert deterministic_tier("use kimi-k3 for this", min_classify_len=10) == Tier.ULTRA
 
 
 def test_override_wins_even_for_short_prompt():
     # Regression: the length check used to run BEFORE the override, so a short
     # prompt with an explicit model request was wrongly routed to mini.
-    # "glm-5.2" is 7 chars (< min_classify_len) but the override must still win.
-    assert deterministic_tier("glm-5.2", min_classify_len=10) == Tier.PRO
+    # "kimi-k3" is 7 chars (< min_classify_len) but the override must still win.
+    assert deterministic_tier("kimi-k3", min_classify_len=10) == Tier.ULTRA
+
+
+def test_non_routed_model_id_defers_to_llm():
+    # glm-5.2 / minimax-m3 are still valid API ids but no longer routed tiers;
+    # an explicit mention is treated as ambiguous and deferred to the LLM.
+    assert deterministic_tier("use glm-5.2", min_classify_len=10) is None
+    assert deterministic_tier("use minimax-m3", min_classify_len=10) is None
 
 
 def test_short_technical_prompt_defers_to_llm():
     # "debug this segfault" is short but hard — must NOT be swallowed by the
-    # length check. It defers to the LLM (None), which routes it to pro/pro-max.
+    # length check. It defers to the LLM (None), which routes it to pro/ultra.
     assert deterministic_tier("debug this segfault", min_classify_len=10) is None
 
 

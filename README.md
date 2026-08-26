@@ -2,7 +2,7 @@
 
 A local **OpenAI-compatible** proxy that routes each chat request to the
 cheapest model that can handle the task. It keeps the expensive models
-(`pro`/`pro-max`) reserved for prompts that truly need them, and sends
+(`pro`/`ultra`) reserved for prompts that truly need them, and sends
 trivial/day-to-day requests to the cheap ones.
 
 It is **provider-agnostic**: it works with any OpenAI-compatible API (Ollama
@@ -24,7 +24,7 @@ Without a router, you have two bad choices:
 
 Nexus breaks that trade-off: it **classifies the intent** of each request and
 routes to the cheapest tier that can handle it. Trivial goes to `mini`,
-day-to-day to `air`, and heavy reasoning only then climbs to `pro`/`pro-max`.
+day-to-day to `air`, and heavy reasoning only then climbs to `pro`/`ultra`.
 
 The result is **expensive-model performance at cheap-model cost** — the same
 answer quality, without wasting tokens on prompts that don't need it.
@@ -40,11 +40,11 @@ answer quality, without wasting tokens on prompts that don't need it.
      (intent, scope, context) — keyword matching can't capture that.
    - **Fail-safe**: LLM error → default `air`. Never breaks the request.
 3. The router forwards to the chosen model and streams the response.
-   - Headers: `X-Router-Model` (model id) and `X-Router-Tier` (mini/air/pro/pro-max).
+   - Headers: `X-Router-Model` (model id) and `X-Router-Tier` (mini/air/pro/ultra).
 
 > **Only the last user message** feeds the classifier. The system prompt and
 > tool-call history are ignored in the tier decision — otherwise accumulated
-> technical context would saturate everything to `pro`/`pro-max`.
+> technical context would saturate everything to `pro`/`ultra`.
 
 ## Tiers
 
@@ -52,8 +52,8 @@ answer quality, without wasting tokens on prompts that don't need it.
 |---|---|
 | `mini` | trivial/mechanical + discussion |
 | `air` (default) | day-to-day |
-| `pro` | complex reasoning / ambiguous design / concurrency / public API |
-| `pro-max` | hard bug, heavy refactor, architecture |
+| `pro` | complex reasoning / coding power / hard debug / refactor / concurrency / public API |
+| `ultra` | hardest problems, whole-architecture, deep synthesis, adversarial |
 
 ## Requirements
 
@@ -103,11 +103,11 @@ tiers:
     model: deepseek-v4-flash:0731
     description: "default - day-to-day"
   pro:
-    model: glm-5.2
-    description: "frontier reasoning"
-  pro-max:
     model: deepseek-v4-pro:0813
     description: "raw coding power"
+  ultra:
+    model: kimi-k3
+    description: "deep synthesis, whole-architecture"
 classifier:
   model: gemma4:31b            # primary LLM decider (JSON decision)
   min_classify_len: 10
@@ -137,8 +137,8 @@ export OLLAMA_BASE_URL="https://ollama.com/v1"
 tiers:
   mini:    { model: gemma4:31b,             description: "trivial/discussion" }
   air:     { model: deepseek-v4-flash:0731, description: "default day-to-day" }
-  pro:     { model: glm-5.2,               description: "reasoning/design" }
-  pro-max: { model: deepseek-v4-pro:0813,  description: "hard bug/refactor" }
+  pro:     { model: deepseek-v4-pro:0813,  description: "coding power/debug" }
+  ultra:   { model: kimi-k3,                description: "whole-architecture/synthesis" }
 classifier:
   model: gemma4:31b
 ```
@@ -155,7 +155,7 @@ tiers:
   mini:    { model: llama3.2:3b,          description: "trivial/discussion" }
   air:     { model: qwen2.5:7b,           description: "default day-to-day" }
   pro:     { model: qwen2.5:32b,          description: "reasoning/design" }
-  pro-max: { model: qwen2.5:72b,          description: "hard bug/refactor" }
+  ultra:   { model: qwen2.5:72b,          description: "hard bug/refactor" }
 classifier:
   model: llama3.2:3b
 ```
@@ -172,7 +172,7 @@ tiers:
   mini:    { model: gpt-4o-mini,          description: "trivial/discussion" }
   air:     { model: gpt-4o-mini,          description: "default day-to-day" }
   pro:     { model: gpt-4o,               description: "reasoning/design" }
-  pro-max: { model: gpt-4o,               description: "hard bug/refactor" }
+  ultra:   { model: gpt-4o,               description: "hard bug/refactor" }
 classifier:
   model: gpt-4o-mini
 ```
@@ -189,7 +189,7 @@ tiers:
   mini:    { model: meta-llama/llama-3.1-8b-instruct, description: "trivial/discussion" }
   air:     { model: anthropic/claude-3.5-haiku,       description: "default day-to-day" }
   pro:     { model: anthropic/claude-3.5-sonnet,      description: "reasoning/design" }
-  pro-max: { model: anthropic/claude-3.7-sonnet,      description: "hard bug/refactor" }
+  ultra:   { model: anthropic/claude-3.7-sonnet,      description: "hard bug/refactor" }
 classifier:
   model: meta-llama/llama-3.1-8b-instruct
 ```
@@ -206,7 +206,7 @@ tiers:
   mini:    { model: llama-3.1-8b-instant, description: "trivial/discussion" }
   air:     { model: llama-3.3-70b-versatile, description: "default day-to-day" }
   pro:     { model: llama-3.3-70b-versatile, description: "reasoning/design" }
-  pro-max: { model: llama-3.3-70b-versatile, description: "hard bug/refactor" }
+  ultra:   { model: llama-3.3-70b-versatile, description: "hard bug/refactor" }
 classifier:
   model: llama-3.1-8b-instant
 ```
@@ -261,8 +261,8 @@ Add a `router` provider in `~/.config/opencode/opencode.jsonc`:
         "adaptive": { "name": "Adaptive (auto-tier)", "limit": { "context": 1048576, "output": 65536 } },
         "gemma4:31b": { "name": "Gemma 4 31B (mini)", "limit": { "context": 1048576, "output": 65536 } },
         "deepseek-v4-flash:0731": { "name": "DeepSeek V4 Flash (air)", "limit": { "context": 1048576, "output": 65536 } },
-        "glm-5.2": { "name": "GLM-5.2 (pro)", "limit": { "context": 524288, "output": 65536 } },
-        "deepseek-v4-pro:0813": { "name": "DeepSeek V4 Pro (pro-max)", "limit": { "context": 1048576, "output": 65536 } }
+        "deepseek-v4-pro:0813": { "name": "DeepSeek V4 Pro (pro)", "limit": { "context": 1048576, "output": 65536 } },
+        "kimi-k3": { "name": "Kimi K3 (ultra)", "limit": { "context": 1048576, "output": 65536 } }
       }
     }
   }
