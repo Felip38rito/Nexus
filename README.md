@@ -229,18 +229,73 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 ```
 
 > `model: "adaptive"` is a virtual id that **always** forces classification.
-> If you send one of the real tier ids (e.g. `deepseek-v4-pro:0813`), the router
-> honors it directly without re-classifying (transparent mode).
+> You can also send a tier name (`mini`, `air`, `pro`, `ultra`) to force that
+> tier, or one of the raw upstream api ids (e.g. `deepseek-v4-pro:0813`) — the
+> router honors it directly without re-classifying (transparent mode).
 
 ### Hermes
 
+Add the router as a **named provider** so Hermes discovers the tiers from the
+router itself (the router is the source of truth — no model list hardcoded).
+
+#### 1. Register the provider in `config.yaml`
+
 ```bash
-hermes config set model.provider openai-compatible
-hermes config set model.base_url http://127.0.0.1:8000
+# Named provider entry. The `api` URL points at the router.
+hermes config set providers.router.api http://127.0.0.1:9000/v1
+hermes config set providers.router.name "Model Router"
+hermes config set providers.router.default_model adaptive
 ```
 
-⚠ Adds a hop to ALL Hermes traffic. Undo with
-`hermes config set model.base_url https://ollama.com/v1` (or your original value).
+> Do **NOT** set `providers.router.models`. Leaving it out lets Hermes
+> *live-probe* `GET /v1/models` on the router and use exactly what the router
+> advertises (`adaptive, mini, air, pro, ultra`). If you hardcode a
+> comma-separated string, Hermes treats it as a single literal model id and the
+> picker shows one broken row. To pin a specific list instead, set
+> `providers.router.discover_models false` and provide a proper YAML list.
+
+#### 2. Make it the active provider
+
+```bash
+hermes config set model.provider router
+hermes config set model.default_model adaptive
+```
+
+#### 3. Pick a model (tiers show up)
+
+```bash
+hermes model
+```
+
+The picker now lists the router with **5 selectable models**:
+
+```
+⚙ Model Picker — Model Router
+Select a model (5 available) — type to filter
+> adaptive    # router decides the tier automatically
+  mini        # force gemma4:31b
+  air         # force deepseek-v4-flash:0731
+  pro         # force deepseek-v4-pro:0813
+  ultra       # force kimi-k3
+```
+
+`adaptive` routes every request through the classifier; the four tier entries
+force that tier directly (transparent mode).
+
+#### 4. Optional: short aliases
+
+To use `/model pro` / `/model air` / etc. instead of the full ids:
+
+```bash
+hermes config set model.aliases.mini router/mini
+hermes config set model.aliases.air router/air
+hermes config set model.aliases.pro router/pro
+hermes config set model.aliases.ultra router/ultra
+```
+
+> ⚠ Adding the router as your Hermes provider sends **all** Hermes traffic
+> through it. To undo, restore the previous provider:
+> `hermes config set model.provider ollama-cloud` (or whichever you used).
 
 ### OpenCode
 
@@ -259,10 +314,10 @@ Add a `router` provider in `~/.config/opencode/opencode.jsonc`:
       },
       "models": {
         "adaptive": { "name": "Adaptive (auto-tier)", "limit": { "context": 1048576, "output": 65536 } },
-        "gemma4:31b": { "name": "Gemma 4 31B (mini)", "limit": { "context": 1048576, "output": 65536 } },
-        "deepseek-v4-flash:0731": { "name": "DeepSeek V4 Flash (air)", "limit": { "context": 1048576, "output": 65536 } },
-        "deepseek-v4-pro:0813": { "name": "DeepSeek V4 Pro (pro)", "limit": { "context": 1048576, "output": 65536 } },
-        "kimi-k3": { "name": "Kimi K3 (ultra)", "limit": { "context": 1048576, "output": 65536 } }
+        "mini": { "name": "Gemma 4 31B (mini)", "limit": { "context": 1048576, "output": 65536 } },
+        "air": { "name": "DeepSeek V4 Flash (air)", "limit": { "context": 1048576, "output": 65536 } },
+        "pro": { "name": "DeepSeek V4 Pro (pro)", "limit": { "context": 1048576, "output": 65536 } },
+        "ultra": { "name": "Kimi K3 (ultra)", "limit": { "context": 1048576, "output": 65536 } }
       }
     }
   }
