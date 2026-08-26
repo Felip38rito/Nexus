@@ -1,96 +1,103 @@
-# Model Router
+# Nexus
 
-Proxy local **OpenAI-compatível** que roteia cada chat request pro modelo
-Ollama Cloud mais barato que dá conta da tarefa. Deixa os modelos caros
-(`pro`/`pro-max`) reservados pros prompts que realmente exigem, e manda
-trivial/day-to-day pros baratos.
+A local **OpenAI-compatible** proxy that routes each chat request to the
+cheapest model that can handle the task. It keeps the expensive models
+(`pro`/`pro-max`) reserved for prompts that truly need them, and sends
+trivial/day-to-day requests to the cheap ones.
 
-Ferramenta **global do usuário** — não pertence a nenhum projeto específico.
-Mora em `~/Developer/model-router/`, fora do repo Aura.
+It is **provider-agnostic**: it works with any OpenAI-compatible API (Ollama
+Cloud, local Ollama, OpenAI, OpenRouter, Groq, Together, …). You just set the
+`base_url` + key of your provider and the tier → model mapping.
 
-## Como funciona
+## Why Nexus?
 
-1. Cliente (Hermes, OpenCode, curl, qualquer OpenAI SDK) aponta `base_url` pro router.
-2. Router lê o prompt e classifica a dificuldade (classificador **híbrido**):
-   - **Determinístico** só para óbvios: override explícito de modelo ("use
-     deepseek-v4-pro") e chatter trivial (saudações/curtos). Instantâneo, grátis.
-   - **LLM primário** para todo o resto: `gemma4:31b` retorna JSON estrito com a
-     decisão qualitativa de tier. A decisão de tier é fundamentalmente
-     qualitativa (intenção, escopo, contexto) — keyword matching não captura isso.
-   - **Fail-safe**: erro do LLM → default `air`. Nunca quebra o request.
-3. Router repassa pro modelo escolhido e faz streaming da resposta.
-   - Headers: `X-Router-Model` (id do modelo) e `X-Router-Tier` (mini/air/pro/pro-max).
+The problem Nexus solves is simple and expensive: **paying for a Pro model to
+answer "hello"**.
 
-## Tiers → modelos (API ids reais do `/v1/models`)
+Without a router, you have two bad choices:
 
-| Tier | Modelo | Uso |
-|---|---|---|
-| mini | `gemma4:31b` | trivial/mecânico + discussão |
-| air (default) | `deepseek-v4-flash:0731` | day-to-day |
-| pro | `glm-5.2` | reasoning complexo / design ambíguo / concurrency / public API |
-| pro-max | `deepseek-v4-pro:0813` | bug difícil, refactor pesado, arquitetura |
+- **Pin to the cheap model** → complex prompts (architecture refactor, race
+  condition debugging) get weak answers and you waste time.
+- **Pin to the expensive model** → every request, even trivial ones, pays the
+  top-tier price. In an agent (Hermes, OpenCode, Cursor) that makes dozens of
+  tool calls per task, that burns credits for nothing.
 
-> **IMPORTANTE:** o sufixo `:cloud` (ex. `deepseek-v4-flash:cloud`) é **alias
-> do Hermes** e NÃO existe na API — retorna 404. O router usa os ids crus.
+Nexus breaks that trade-off: it **classifies the intent** of each request and
+routes to the cheapest tier that can handle it. Trivial goes to `mini`,
+day-to-day to `air`, and heavy reasoning only then climbs to `pro`/`pro-max`.
 
-## Requisitos
+The result is **expensive-model performance at cheap-model cost** — the same
+answer quality, without wasting tokens on prompts that don't need it.
+
+## How it works
+
+1. A client (Hermes, OpenCode, curl, any OpenAI SDK) points its `base_url` at the router.
+2. The router reads the prompt and classifies the difficulty (**hybrid** classifier):
+   - **Deterministic** only for the obvious: explicit model override ("use
+     deepseek-v4-pro") and trivial chatter (greetings/short). Instant, free.
+   - **LLM-primary** for everything else: a cheap model returns strict JSON
+     with the qualitative tier decision. Tiering is fundamentally qualitative
+     (intent, scope, context) — keyword matching can't capture that.
+   - **Fail-safe**: LLM error → default `air`. Never breaks the request.
+3. The router forwards to the chosen model and streams the response.
+   - Headers: `X-Router-Model` (model id) and `X-Router-Tier` (mini/air/pro/pro-max).
+
+> **Only the last user message** feeds the classifier. The system prompt and
+> tool-call history are ignored in the tier decision — otherwise accumulated
+> technical context would saturate everything to `pro`/`pro-max`.
+
+## Tiers
+
+| Tier | Use |
+|---|---|
+| `mini` | trivial/mechanical + discussion |
+| `air` (default) | day-to-day |
+| `pro` | complex reasoning / ambiguous design / concurrency / public API |
+| `pro-max` | hard bug, heavy refactor, architecture |
+
+## Requirements
 
 - Python ≥ 3.11 via [`uv`](https://docs.astral.sh/uv/).
-- `OLLAMA_API_KEY` (upstream key da Ollama Cloud).
+- An upstream provider API key (e.g. `OLLAMA_API_KEY`).
 
-## Setup e execução
+## Quick start
 
 ```bash
-cd ~/Developer/model-router
+git clone <your-repo> && cd model-router
 uv sync --extra dev
-cp .env.example .env        # preenche OLLAMA_API_KEY
+cp .env.example .env        # fill in your provider key
 PYTHONPATH=src uv run uvicorn model_router.main:app --host 127.0.0.1 --port 8000
 ```
 
-Testes:
+Tests:
 
 ```bash
-cd ~/Developer/model-router
 uv run pytest
 ```
 
-## Uso (curl)
+## Environment configuration
 
-```bash
-# Listar modelos
-curl http://127.0.0.1:8000/v1/models
-
-# Chat (streaming)
-curl http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"whatever","messages":[{"role":"user","content":"hello"}],"stream":true}'
-```
-
-Repare no header `x-router-model`/`x-router-tier` na resposta.
-
-## Configuração via env
-
-| Var | Default | Descrição |
+| Var | Default | Description |
 |---|---|---|
-| `OLLAMA_API_KEY` | — | key da Ollama Cloud (obrigatória) |
-| `OLLAMA_BASE_URL` | `https://ollama.com/v1` | upstream |
-| `ROUTER_HOST` | `127.0.0.1` | bind do router |
-| `ROUTER_PORT` | `8000` | porta do router |
-| `ROUTER_DEFAULT_TIER` | `air` | fallback de último recurso |
-| `ROUTER_MIN_CLASSIFY_LEN` | `10` | prompts menores que isso = triviais (`mini`) |
-| `ROUTER_API_KEY` | (vazio) | se setar, cliente precisa mandar `Authorization: Bearer <chave>` |
-| `ROUTER_MODELS_YAML` | `router.models.yaml` | caminho pra um YAML de modelos customizado |
+| `OLLAMA_API_KEY` | — | upstream provider key (required) |
+| `OLLAMA_BASE_URL` | `https://ollama.com/v1` | provider `/v1` endpoint |
+| `ROUTER_HOST` | `127.0.0.1` | router bind address |
+| `ROUTER_PORT` | `8000` | router port |
+| `ROUTER_DEFAULT_TIER` | `air` | last-resort fallback |
+| `ROUTER_MIN_CLASSIFY_LEN` | `10` | prompts shorter than this = trivial (`mini`) |
+| `ROUTER_API_KEY` | (empty) | if set, clients must send `Authorization: Bearer <key>` |
+| `ROUTER_MODELS_YAML` | `router.models.yaml` | path to a custom models YAML |
 
-## Configuração de modelos (YAML)
+## Model configuration (YAML)
 
-Os modelos são configuráveis via arquivo YAML (por padrão `router.models.yaml`
-na raiz do projeto, ou aponte outro com `ROUTER_MODELS_YAML`). Estrutura:
+The 4 tiers are fixed; only the models/descriptions change. Edit
+`router.models.yaml` (or point to another with `ROUTER_MODELS_YAML`):
 
 ```yaml
 default_tier: air
 tiers:
   mini:
-    model: gemma4:31b          # API id real (sem sufixo :cloud)
+    model: gemma4:31b          # provider's real API id
     description: "fast/cheap - discussion + trivial/mechanical"
   air:
     model: deepseek-v4-flash:0731
@@ -102,31 +109,197 @@ tiers:
     model: deepseek-v4-pro:0813
     description: "raw coding power"
 classifier:
-  model: gemma4:31b             # LLM decisor primário (JSON de decisão)
-  min_classify_len: 10          # prompts menores que isso = triviais (mini)
+  model: gemma4:31b            # primary LLM decider (JSON decision)
+  min_classify_len: 10
 ```
 
-Os 4 tiers (mini/air/pro/pro-max) são fixos — só os modelos/descrições mudam.
-O arquivo default tem comentários úteis.
+> **IMPORTANT:** use the provider's **raw API ids** (e.g. `deepseek-v4-flash:0731`),
+> not tool aliases (e.g. `deepseek-v4-flash:cloud` is a Hermes alias and returns
+> 404 on the API). Check the real ids with `curl <base_url>/v1/models`.
 
-## Pontar o Hermes pro router (opcional, reversível)
+> **The classifier also runs on the provider.** `classifier.model` must be a
+> model the provider has (preferably a cheap one). It uses the same
+> `OLLAMA_BASE_URL`/`OLLAMA_API_KEY` as the upstream.
+
+## Supported providers
+
+The router is agnostic. To switch providers, change **3 things**:
+`OLLAMA_BASE_URL`, `OLLAMA_API_KEY`, and the tier mapping in the YAML.
+
+### Ollama Cloud (the example used here)
+
+```bash
+export OLLAMA_API_KEY="<your-key>"
+export OLLAMA_BASE_URL="https://ollama.com/v1"
+```
+
+```yaml
+tiers:
+  mini:    { model: gemma4:31b,             description: "trivial/discussion" }
+  air:     { model: deepseek-v4-flash:0731, description: "default day-to-day" }
+  pro:     { model: glm-5.2,               description: "reasoning/design" }
+  pro-max: { model: deepseek-v4-pro:0813,  description: "hard bug/refactor" }
+classifier:
+  model: gemma4:31b
+```
+
+### Local Ollama
+
+```bash
+export OLLAMA_API_KEY="ollama"            # local doesn't auth; any value
+export OLLAMA_BASE_URL="http://127.0.0.1:11434/v1"
+```
+
+```yaml
+tiers:
+  mini:    { model: llama3.2:3b,          description: "trivial/discussion" }
+  air:     { model: qwen2.5:7b,           description: "default day-to-day" }
+  pro:     { model: qwen2.5:32b,          description: "reasoning/design" }
+  pro-max: { model: qwen2.5:72b,          description: "hard bug/refactor" }
+classifier:
+  model: llama3.2:3b
+```
+
+### OpenAI
+
+```bash
+export OLLAMA_API_KEY="sk-..."            # your OpenAI key
+export OLLAMA_BASE_URL="https://api.openai.com/v1"
+```
+
+```yaml
+tiers:
+  mini:    { model: gpt-4o-mini,          description: "trivial/discussion" }
+  air:     { model: gpt-4o-mini,          description: "default day-to-day" }
+  pro:     { model: gpt-4o,               description: "reasoning/design" }
+  pro-max: { model: gpt-4o,               description: "hard bug/refactor" }
+classifier:
+  model: gpt-4o-mini
+```
+
+### OpenRouter
+
+```bash
+export OLLAMA_API_KEY="sk-or-..."         # your OpenRouter key
+export OLLAMA_BASE_URL="https://openrouter.ai/api/v1"
+```
+
+```yaml
+tiers:
+  mini:    { model: meta-llama/llama-3.1-8b-instruct, description: "trivial/discussion" }
+  air:     { model: anthropic/claude-3.5-haiku,       description: "default day-to-day" }
+  pro:     { model: anthropic/claude-3.5-sonnet,      description: "reasoning/design" }
+  pro-max: { model: anthropic/claude-3.7-sonnet,      description: "hard bug/refactor" }
+classifier:
+  model: meta-llama/llama-3.1-8b-instruct
+```
+
+### Groq
+
+```bash
+export OLLAMA_API_KEY="gsk_..."           # your Groq key
+export OLLAMA_BASE_URL="https://api.groq.com/openai/v1"
+```
+
+```yaml
+tiers:
+  mini:    { model: llama-3.1-8b-instant, description: "trivial/discussion" }
+  air:     { model: llama-3.3-70b-versatile, description: "default day-to-day" }
+  pro:     { model: llama-3.3-70b-versatile, description: "reasoning/design" }
+  pro-max: { model: llama-3.3-70b-versatile, description: "hard bug/refactor" }
+classifier:
+  model: llama-3.1-8b-instant
+```
+
+> The model ids above are examples — check your provider's real ids with
+> `curl <base_url>/v1/models` before using them.
+
+## Using it (clients)
+
+### curl
+
+```bash
+# List models
+curl http://127.0.0.1:8000/v1/models
+
+# Chat (streaming) — note the x-router-model / x-router-tier headers
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"adaptive","messages":[{"role":"user","content":"hello"}],"stream":true}'
+```
+
+> `model: "adaptive"` is a virtual id that **always** forces classification.
+> If you send one of the real tier ids (e.g. `deepseek-v4-pro:0813`), the router
+> honors it directly without re-classifying (transparent mode).
+
+### Hermes
 
 ```bash
 hermes config set model.provider openai-compatible
 hermes config set model.base_url http://127.0.0.1:8000
 ```
 
-⚠ Adiciona um hop em TODO o tráfego do Hermes. Desfaça com
-`hermes config set model.base_url https://ollama.com/v1` (ou o valor original).
-Opcional e não muda o config do usuário por padrão.
+⚠ Adds a hop to ALL Hermes traffic. Undo with
+`hermes config set model.base_url https://ollama.com/v1` (or your original value).
 
-## Testes / verificação
+### OpenCode
 
-- 32 testes unitários (`classify`, `config`, `proxy`) com MockTransport.
-- Smoke real contra a Ollama Cloud validado 2026-08-25 (ver `Model Router.md` no vault).
+Add a `router` provider in `~/.config/opencode/opencode.jsonc`:
 
-## Próximos passos / ideias
+```jsonc
+{
+  "model": "router/adaptive",
+  "provider": {
+    "router": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Model Router (local)",
+      "options": {
+        "baseURL": "http://127.0.0.1:9000/v1",
+        "apiKey": "router"
+      },
+      "models": {
+        "adaptive": { "name": "Adaptive (auto-tier)", "limit": { "context": 1048576, "output": 65536 } },
+        "gemma4:31b": { "name": "Gemma 4 31B (mini)", "limit": { "context": 1048576, "output": 65536 } },
+        "deepseek-v4-flash:0731": { "name": "DeepSeek V4 Flash (air)", "limit": { "context": 1048576, "output": 65536 } },
+        "glm-5.2": { "name": "GLM-5.2 (pro)", "limit": { "context": 524288, "output": 65536 } },
+        "deepseek-v4-pro:0813": { "name": "DeepSeek V4 Pro (pro-max)", "limit": { "context": 1048576, "output": 65536 } }
+      }
+    }
+  }
+}
+```
 
-- Levar pro GitHub (repo próprio).
-- Serviço de longo prazo via `launchd`/`systemd`/Docker.
-- Refinar keyword heuristics (feedback de rotas erradas).
+> The router doesn't require auth by default, so `apiKey` can be any non-empty
+> value. If you enable `ROUTER_API_KEY`, replace it with the real value.
+
+## Running as a service (launchd — macOS)
+
+To have the router start at login and restart itself on crash, use a LaunchAgent:
+
+- Plist: `~/Library/LaunchAgents/br.com.felp38rito.nexus.plist`
+  (`RunAtLoad` + `KeepAlive` + `ThrottleInterval=10`; logs in `logs/`).
+- Wrapper: `routerctl.sh` — `start | stop | restart | status | logs | tail`.
+
+```bash
+./routerctl.sh status     # is it running?
+./routerctl.sh restart    # after changing code/config
+./routerctl.sh tail       # follow logs live
+```
+
+> **Pitfall:** launchd doesn't source your `~/.zshrc`, so its minimal PATH
+> can't find `uv` (which usually lives in `~/.local/bin`). The plist MUST set
+> `EnvironmentVariables.PATH` to include the `uv` directory, otherwise the
+> service crash-loops with `exec: uv: not found`.
+
+## Security
+
+- The provider key is read from env (or `.env`), **never** committed.
+- `.gitignore` covers `.env`, `.venv/`, `logs/`, `router.log`.
+- `yaml.safe_load` (no YAML RCE).
+- Default bind on `127.0.0.1` (not exposed to the network).
+- Optional auth via `ROUTER_API_KEY` (Bearer).
+
+## Tests / verification
+
+- 33 unit tests (`classify`, `config`, `proxy`) with MockTransport.
+- Real smoke test against Ollama Cloud validated 2026-08-25.

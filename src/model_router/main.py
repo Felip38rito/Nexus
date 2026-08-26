@@ -13,7 +13,7 @@ from .proxy import router as proxy_router
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
-        title="Model Router",
+        title="Nexus",
         version=__version__,
         description="Local OpenAI-compatible proxy routing requests to the cheapest adequate Ollama Cloud model.",
     )

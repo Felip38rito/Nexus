@@ -72,30 +72,41 @@ async def chat_completions(request: Request):
     if not isinstance(messages, list) or not messages:
         raise HTTPException(status_code=400, detail="'messages' must be a non-empty list")
 
-    # Concatenate ONLY the user messages for the classifier. The system prompt
-    # (Hermes' giant "You are Hermes Agent..." block) and assistant/tool history
-    # are packed with pro/pro-max keywords (analyze, codebase, concurrency,
-    # lock, auth, performance, race condition, ...) that would saturate the
-    # deterministic classifier and route every request to pro/pro-max. Only the
-    # user's actual intent should drive the tier. Fall back to all messages if
-    # there's no user message at all (defensive edge case).
-    parts: list[str] = []
+    # Classify ONLY the LAST user message — the user's current intent. The
+    # system prompt (Hermes' giant "You are Hermes Agent..." block) and
+    # assistant/tool history are packed with pro/pro-max keywords (analyze,
+    # codebase, concurrency, lock, auth, performance, race condition, ...) that
+    # would saturate the classifier. And concatenating ALL user messages from
+    # the conversation means the classifier prompt grows over time, so a long
+    # technical chat saturates the tier to pro/pro-max even when the current
+    # request is trivial. Using only the last user message keeps the tier
+    # decision anchored to what the user is asking RIGHT NOW. Fall back to all
+    # messages if there's no user message at all (defensive edge case).
+    last_user_content: str | None = None
     for msg in messages:
         if msg.get("role") != "user":
             continue
         content = msg.get("content")
         if isinstance(content, str):
-            parts.append(content)
+            last_user_content = content
         elif isinstance(content, list):
-            for c in content:
-                if isinstance(c, dict) and c.get("type") == "text":
-                    parts.append(str(c.get("text", "")))
-    if not parts:
+            texts = [
+                str(c.get("text", ""))
+                for c in content
+                if isinstance(c, dict) and c.get("type") == "text"
+            ]
+            if texts:
+                last_user_content = "\n".join(texts)
+    if last_user_content is not None:
+        prompt = last_user_content
+    else:
+        # Defensive: no user message at all — use any text we can find.
+        parts: list[str] = []
         for msg in messages:
             content = msg.get("content")
             if isinstance(content, str):
                 parts.append(content)
-    prompt = "\n".join(parts)
+        prompt = "\n".join(parts)
 
     # Transparent mode: if the client explicitly requested one of OUR tiers'
     # api ids, honor it directly instead of re-classifying.

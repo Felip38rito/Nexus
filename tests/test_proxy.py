@@ -150,6 +150,42 @@ def test_system_prompt_keywords_do_not_poison_classification(client: TestClient,
     assert seen["model"] in {"deepseek-v4-flash:0731", "gemma4:31b"}
 
 
+def test_long_history_does_not_saturate_tier(client: TestClient, monkeypatch):
+    """Regression: concatenating ALL user messages means a long technical
+    conversation grows the classifier prompt, so even a trivial follow-up
+    ("obrigado!") gets routed to pro/pro-max. The fix: classify ONLY the last
+    user message. This test sends a conversation with several complex user
+    messages followed by a trivial last message — the router must NOT route to
+    pro/pro-max."""
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        json_body = kw["json"]
+        seen["model"] = json_body["model"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    messages = [
+        {"role": "system", "content": "You are Hermes Agent. Analyze codebase, concurrency, race conditions."},
+        {"role": "user", "content": "Analyze the whole project architecture and evaluate the concurrency model"},
+        {"role": "assistant", "content": "I analyzed the codebase..."},
+        {"role": "user", "content": "Now review the kernel module and assess the lock-free queue performance"},
+        {"role": "assistant", "content": "The race condition in..."},
+        {"role": "user", "content": "valeu!"},  # trivial last message
+    ]
+    payload = {"model": "adaptive", "messages": messages}
+    r = client.post("/v1/chat/completions", json=payload)
+    assert r.status_code == 200
+    # "valeu!" is < min_classify_len (10) → deterministic mini.
+    assert r.headers["X-Router-Tier"] == "mini"
+    assert seen["model"] == "gemma4:31b"
+
+
 def test_transparent_known_model_passthrough(client: TestClient, monkeypatch):
     seen = {}
 
