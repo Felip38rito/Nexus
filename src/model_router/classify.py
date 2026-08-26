@@ -1,11 +1,16 @@
 """Hybrid router classifier.
 
-1. Deterministic keyword rules run first (free, ~instant). If the evidence is
-   clear enough, a tier is returned.
-2. If the rules are ambiguous (conflicting / no signal), fall back to a cheap
-   LLM call (`gemma4:31b`) that returns a strict JSON decision.
-3. On any parse/network error the classifier degrades to the default tier —
-   it never fails the request.
+The tier decision is fundamentally QUALITATIVE — it depends on intent, scope,
+and context, not surface keywords. So the LLM is the PRIMARY decider, and the
+deterministic layer is reduced to the two things it can do reliably:
+
+1. An explicit model override in the prompt ("use deepseek-v4-pro") — always wins.
+2. Obviously-trivial chatter (very short prompts) — routed to mini to save a
+   round-trip.
+
+Everything else is deferred to the LLM (`gemma4:31b`), which returns a strict
+JSON decision. On any error the classifier degrades to the default tier (air) —
+it never fails the request.
 """
 from __future__ import annotations
 
@@ -21,49 +26,12 @@ from .models import DEFAULT_TIER, Tier
 log = logging.getLogger("model_router.classify")
 
 # Explicit model override wins over everything: "use deepseek-v4-pro", etc.
+# This is the ONLY keyword-style match left — it targets specific model ids,
+# not generic difficulty words, so it can't false-positive on normal prose.
 _MODEL_OVERRIDE_RE = re.compile(
     r"\b(deepseek-v4-pro|deepseek-v4-flash|glm-5\.2|gemma4:31b|minimax-m3|kimi-k3)\b",
     re.IGNORECASE,
 )
-
-# Weighted keyword signals. Scoring is additive; ties/emptiness -> None (LLM).
-_PRO_MAX_KEYWORDS = [
-    "pro-max", "pro max", "deepseek-v4-pro", "swe-bench",
-    "raw coding", "adversarial", "reverse-engineer",
-    "refactor this entire", "rewrite the whole", "legacy codebase", "bytecode",
-    "compiler", "linker", "kernel module", "race condition", "exploit", "pwn",
-]
-# Complexity signals — deliberately language-agnostic (Swift, Rust, Go, Python,
-# JS/TS, Java, C/C++, systems). These flag hard technical work, not any one stack.
-_PRO_KEYWORDS = [
-    # architecture / design
-    "architecture decision", "adr", "ambiguous", "trade-off", "tradeoff",
-    "non-trivial", "non trivial", "architectural", "design decision",
-    # concurrency & threading (multi-language)
-    "concurrency", "multithreading", "thread-safe", "thread safety",
-    "async", "await", "goroutine", "mutex", "lock", "deadlock",
-    "race condition", "data race", "actor", "actor model", "isolate",
-    # memory / performance / safety
-    "memory leak", "segfault", "segmentation fault", "unsafe", "borrow",
-    "garbage collector", "gc pause", "crash", "stack trace", "buffer overflow",
-    "out of memory", "performance", "latency",
-    # debugging
-    "debug", "debugging", "hard to reproduce", "regression",
-    # api / systems / security
-    "public api", "sdk", "protocol", "distributed", "kernel", "migration",
-    "encryption", "auth", "authentication", "authorization",
-]
-# Words that bump things DOWN (common in chat / trivial asks).
-_MIN_KEYWORDS = [
-    "rename", "typo", "format", "reformat", "spell-check", "rephrase",
-    "summarize", "transcribe", "what is", "who is", "explain briefly",
-    "simple", "trivial", "quick", "boilerplate", "hello", "hi", "thanks",
-]
-
-
-def _score(prompt: str, keywords: list[str]) -> int:
-    low = prompt.lower()
-    return sum(1 for kw in keywords if kw.lower() in low)
 
 
 def _explicit_override(prompt: str) -> Tier | None:
@@ -83,41 +51,51 @@ def _explicit_override(prompt: str) -> Tier | None:
     return mapping.get(token)
 
 
-def deterministic_tier(prompt: str, min_classify_len: int = 80) -> Tier | None:
-    """Return a tier from keyword evidence, or None if ambiguous."""
-    if len(prompt) < min_classify_len:
-        return Tier.MINI
+def deterministic_tier(prompt: str, min_classify_len: int = 10) -> Tier | None:
+    """Decide only the obvious cases; return None to defer to the LLM.
 
+    Two deterministic decisions, nothing more:
+
+    1. Explicit model override — always wins, even for short prompts.
+    2. Very short prompt (trivial chatter) — mini.
+
+    Everything else returns None so the LLM makes the qualitative call. There
+    are no difficulty keywords anymore: they were substring-matching common
+    words ("hi" inside "this"/"crashing", "lock" inside "block"/"clock") and
+    routing prompts to the wrong tier.
+    """
+    # 1. Explicit override wins over everything, including the length check.
     override = _explicit_override(prompt)
     if override is not None:
         return override
 
-    pro_max_score = _score(prompt, _PRO_MAX_KEYWORDS)
-    pro_score = _score(prompt, _PRO_KEYWORDS)
-    mini_score = _score(prompt, _MIN_KEYWORDS)
-
-    # Heavy signals dominate.
-    if pro_max_score >= 1:
-        return Tier.PRO_MAX
-    if pro_score >= 2:
-        return Tier.PRO
-    # A single pro keyword plus no down-signal is weakly pro.
-    if pro_score == 1 and mini_score == 0:
-        return Tier.PRO
-    # Nothing but chatter.
-    if mini_score >= 2:
+    # 2. Trivial chatter: too short to be a real task.
+    if len(prompt) < min_classify_len:
         return Tier.MINI
+
+    # 3. Defer to the LLM for the qualitative decision.
     return None
 
 
-LLM_SYSTEM = (
-    "You are a model router. Decide the cheapest adequate Ollama Cloud model tier "
-    "for the user's request. Reply with ONLY a single JSON object, no commentary, "
-    "of the form {\"model\": \"mini|air|pro|pro-max\", \"reason\": \"<short>\"}. "
-    "Rules: mini = trivial/mechanical/short chat; air = normal day-to-day; "
-    "pro = complex reasoning, ambiguous design, concurrency, public API; "
-    "pro-max = hardest debugging/refactors/architecture."
-)
+LLM_SYSTEM = """You are a model router. Pick the most appropriate Ollama Cloud model tier for the user's request.
+
+Reply with ONLY a single JSON object, no commentary, of the form {"model": "mini|air|pro|pro-max", "reason": "<short>"}.
+
+Tier definitions:
+- mini   = trivial/mechanical/short chat, yes-no questions, simple lookups.
+- air    = normal day-to-day implementation, straightforward coding, single-file edits.
+- pro    = complex reasoning, architecture analysis, codebase review, ambiguous design, concurrency, public API design, multi-file impact assessment. Also: any request asking to "analyze", "evaluate", "assess", "review", or "improve" a project/codebase/system.
+- pro-max = hardest debugging, large-scale refactors, whole-architecture decisions, reverse-engineering, adversarial analysis, anything requiring deep synthesis across many files.
+
+Think about what EXECUTING the request would require (reading many files, cross-referencing, deep reasoning) — not just the surface text. A short prompt like "analyze the whole project" implies reading dozens of files and synthesizing — that is pro or pro-max, not mini.
+
+Examples:
+{"model": "mini", "reason": "simple greeting"}
+{"model": "air", "reason": "straightforward single-file edit"}
+{"model": "pro", "reason": "analyzes project architecture, requires multi-file reasoning"}
+{"model": "pro", "reason": "avaliação de codebase inteira, reasoning complexo"}
+{"model": "pro-max", "reason": "whole-codebase refactor, deep synthesis required"}
+{"model": "pro", "reason": "revisar e melhorar o projeto, múltiplos módulos envolvidos"}"""
 
 
 async def llm_tier(
@@ -139,7 +117,7 @@ async def llm_tier(
                 {"role": "user", "content": prompt[:4000]},
             ],
             "temperature": 0,
-            "max_tokens": 60,
+            "max_tokens": 120,
             "stream": False,
         }
         resp = await client.post(
@@ -172,7 +150,8 @@ async def classify(
     settings: Any,
     client: httpx.AsyncClient | None = None,
 ) -> Tier:
-    """Full hybrid path. Deterministic first, LLM fallback, default last."""
+    """Full hybrid path. Deterministic (override/trivial) first, LLM primary,
+    default (air) last."""
     det = deterministic_tier(prompt, settings.min_classify_len)
     if det is not None:
         return det

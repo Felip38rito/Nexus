@@ -1,4 +1,8 @@
-"""Tests for the deterministic + LLM-hybrid classifier."""
+"""Tests for the LLM-primary classifier.
+
+The deterministic layer now only handles two cases: explicit model overrides
+and obviously-trivial chatter. Everything else defers to the LLM (returns None).
+"""
 import json
 
 import httpx
@@ -9,45 +13,52 @@ from model_router.models import Tier
 
 
 def test_trivial_short_prompt_mini():
-    assert deterministic_tier("hi", min_classify_len=20) == Tier.MINI
+    assert deterministic_tier("hi", min_classify_len=10) == Tier.MINI
 
 
-def test_chat_default_air():
-    # A normal-length question has no decisive keyword signal -> ambiguous (None).
-    p = "What is the capital of France and what is its population?"
-    assert deterministic_tier(p, min_classify_len=20) is None
-
-
-def test_multistep_concurrency_pro():
-    p = "Refactor this codebase to use @MainActor concurrency safely and write an ADR."
-    assert deterministic_tier(p, min_classify_len=20) == Tier.PRO
-
-
-def test_hard_debug_promax():
-    p = "Please debug this stack trace in a legacy codebase and fix the race condition."
-    assert deterministic_tier(p, min_classify_len=20) == Tier.PRO_MAX
+def test_short_greetings_mini():
+    assert deterministic_tier("ok", min_classify_len=10) == Tier.MINI
+    assert deterministic_tier("thanks", min_classify_len=10) == Tier.MINI
+    assert deterministic_tier("fala", min_classify_len=10) == Tier.MINI
 
 
 def test_explicit_override_wins():
-    assert deterministic_tier("use deepseek-v4-pro for this", min_classify_len=20) == Tier.PRO_MAX
-    assert deterministic_tier("run gemma4:31b on this", min_classify_len=20) == Tier.MINI
+    assert deterministic_tier("use deepseek-v4-pro for this", min_classify_len=10) == Tier.PRO_MAX
+    assert deterministic_tier("run gemma4:31b on this", min_classify_len=10) == Tier.MINI
+    assert deterministic_tier("use glm-5.2", min_classify_len=10) == Tier.PRO
 
 
-def test_ambiguous_returns_none_for_llm():
-    # Genuinely ambiguous — no decisive keyword signal -> None (LLM fallback).
-    p = "Could you go over the changes on the landing page and share your overall thoughts on the layout?"
-    assert deterministic_tier(p, min_classify_len=20) is None
+def test_override_wins_even_for_short_prompt():
+    # Regression: the length check used to run BEFORE the override, so a short
+    # prompt with an explicit model request was wrongly routed to mini.
+    # "glm-5.2" is 7 chars (< min_classify_len) but the override must still win.
+    assert deterministic_tier("glm-5.2", min_classify_len=10) == Tier.PRO
 
 
-def test_no_swift_only_bias():
-    # A hard concurrency bug in Rust (not Swift) should still route to pro.
-    p = "The goroutine scheduler deadlocks under load; fix the data race in the mutex-protected queue."
-    assert deterministic_tier(p, min_classify_len=20) == Tier.PRO
+def test_short_technical_prompt_defers_to_llm():
+    # "debug this segfault" is short but hard — must NOT be swallowed by the
+    # length check. It defers to the LLM (None), which routes it to pro/pro-max.
+    assert deterministic_tier("debug this segfault", min_classify_len=10) is None
 
 
-def test_system_and_memory_signals_route_to_pro():
-    p = "Investigate the segfault and memory leak in the C extension and improve latency."
-    assert deterministic_tier(p, min_classify_len=20) == Tier.PRO
+def test_normal_prompt_defers_to_llm():
+    # No difficulty keywords anymore — a normal prompt is always deferred to the LLM.
+    p = "What is the capital of France and what is its population?"
+    assert deterministic_tier(p, min_classify_len=10) is None
+
+
+def test_complex_prompt_defers_to_llm():
+    # Even obviously-complex prompts defer to the LLM (qualitative decision).
+    p = "Refactor this codebase to use @MainActor concurrency safely and write an ADR."
+    assert deterministic_tier(p, min_classify_len=10) is None
+
+
+def test_no_substring_false_positives():
+    # Regression: "hi" used to substring-match inside "this"/"which"/"crashing",
+    # dragging complex prompts down to mini. No keyword matching remains, so a
+    # prompt containing "this"/"crashing" is simply deferred to the LLM.
+    assert deterministic_tier("why is my app crashing", min_classify_len=10) is None
+    assert deterministic_tier("review the architecture and suggest improvements", min_classify_len=10) is None
 
 
 @pytest.mark.asyncio

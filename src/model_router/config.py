@@ -61,7 +61,7 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
 
     classifier = data.get("classifier") or {}
     classifier_model = str(classifier.get("model", "gemma4:31b"))
-    min_classify_len = int(classifier.get("min_classify_len", 20))
+    min_classify_len = int(classifier.get("min_classify_len", 10))
 
     default_raw = data.get("default_tier")
     try:
@@ -86,7 +86,7 @@ class Settings:
     default_tier: Tier = DEFAULT_TIER
     # Minimum combined message length before we bother classifying at all.
     # Below this, the request is treated as trivial (mini).
-    min_classify_len: int = 20
+    min_classify_len: int = 10
     # Optional bearer token clients must send to reach the router.
     require_auth: str = ""
     # Mounted model table + classifier config (from YAML or defaults).
@@ -117,7 +117,7 @@ class Settings:
             router_host=os.environ.get("ROUTER_HOST", "127.0.0.1"),
             router_port=int(os.environ.get("ROUTER_PORT", "8000")),
             default_tier=Tier(os.environ.get("ROUTER_DEFAULT_TIER", DEFAULT_TIER.value)),
-            min_classify_len=int(os.environ.get("ROUTER_MIN_CLASSIFY_LEN", "20")),
+            min_classify_len=int(os.environ.get("ROUTER_MIN_CLASSIFY_LEN", "10")),
             require_auth=require_auth,
             models=models,
         )

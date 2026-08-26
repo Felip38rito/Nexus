@@ -26,8 +26,10 @@ tiers:
     description: "raw coding power, hard debugging/refactors"
 
 # Classificador.
-# - classifier_model: modelo usado quando a heurística fica ambígua (JSON).
-# - min_classify_len: prompts menores que isso = triviais (mini).
+# - classifier_model: modelo usado na decisão qualitativa (JSON). É o decisor
+#   PRIMÁRIO — a decisão de tier é qualitativa, não keyword-matching.
+# - min_classify_len: prompts menores que isso = chatter trivial (mini). Só
+#   pega saudações/curtos; prompts técnicos curtos vão pro LLM decidir.
 classifier:
   model: gemma4:31b
-  min_classify_len: 20
+  min_classify_len: 10

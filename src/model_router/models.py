@@ -42,7 +42,7 @@ class RouterModels:
     tiers: dict[Tier, ModelSpec] = field(default_factory=lambda: dict(_DEFAULT_TABLE))
     default_tier: Tier = DEFAULT_TIER
     classifier_model: str = "gemma4:31b"
-    min_classify_len: int = 20
+    min_classify_len: int = 10
 
     def tier_for_api_id(self, api_id: str) -> Tier | None:
         for tier, spec in self.tiers.items():
