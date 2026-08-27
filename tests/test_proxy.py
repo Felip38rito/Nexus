@@ -307,3 +307,64 @@ def test_custom_models_yaml_drives_proxy(tmp_path, monkeypatch):
     assert seen["model"] == "my-mini"
     assert r.headers["X-Router-Tier"] == "mini"
     assert r.headers["X-Router-Model"] == "my-mini"
+
+
+def test_multi_provider_routes_to_correct_endpoint(tmp_path, monkeypatch):
+    """A tier pointing at a non-default provider must hit that provider's URL."""
+    from model_router.config import load_models_yaml
+
+    yaml_path = tmp_path / "multi.yaml"
+    yaml_path.write_text(
+        "default_tier: air\n"
+        "providers:\n"
+        "  default:\n"
+        "    base_url: https://ollama.com/v1\n"
+        "    api_key_env: OLLAMA_API_KEY\n"
+        "  gemini:\n"
+        "    base_url: https://generativelanguage.googleapis.com/v1beta\n"
+        "    api_key_env: GEMINI_API_KEY\n"
+        "tiers:\n"
+        "  mini:\n"
+        "    model: gemma4:31b\n"
+        "  air:\n"
+        "    model: deepseek-v4-flash:0731\n"
+        "  pro:\n"
+        "    model: gemini-2.5-pro\n"
+        "    provider: gemini\n"
+        "  ultra:\n"
+        "    model: kimi-k3\n"
+        "classifier:\n"
+        "  model: gemma4:31b\n"
+        "  min_classify_len: 5\n"
+    )
+    models = load_models_yaml(yaml_path)
+    settings = Settings(
+        ollama_api_key="upstream-key",
+        ollama_base_url="https://ollama.com/v1",
+        models=models,
+    )
+    client = TestClient(_make_app(settings))
+
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        seen["url"] = url
+        seen["model"] = kw["json"]["model"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    # Force the pro tier (which points at gemini) via a tier-name override.
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "pro", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 200
+    assert seen["model"] == "gemini-2.5-pro"
+    # The request must go to the gemini provider's endpoint, not ollama.
+    assert seen["url"] == "https://generativelanguage.googleapis.com/v1beta/chat/completions"
+    assert r.headers["X-Router-Tier"] == "pro"

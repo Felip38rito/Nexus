@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from typing import Any
 
@@ -292,10 +293,12 @@ async def classify(
     det = deterministic_tier(prompt, settings.min_classify_len, settings.models)
     if det is not None:
         return det
+    # The classifier runs on its own provider (defaults to "default").
+    classifier_provider = settings.models.provider_for(settings.models.classifier_provider)
     llm = await llm_tier(
         prompt,
-        api_key=settings.effective_api_key,
-        base_url=settings.ollama_base_url,
+        api_key=os.environ.get(classifier_provider.api_key_env, ""),
+        base_url=classifier_provider.base_url,
         classifier_model=settings.models.classifier_model,
         client=client,
     )

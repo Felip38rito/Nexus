@@ -9,7 +9,14 @@ from pathlib import Path
 
 import yaml
 
-from .models import DEFAULT_TIER, ModelSpec, RouterModels, Tier
+from .models import (
+    DEFAULT_PROVIDERS,
+    DEFAULT_TIER,
+    ModelSpec,
+    ProviderSpec,
+    RouterModels,
+    Tier,
+)
 
 
 def _load_dotenv(path: Path | None) -> None:
@@ -29,8 +36,14 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
     """Load a model table + classifier config from a YAML file.
 
     Returns None if the file is missing. Raises if the file is malformed or
-    references an unknown tier. This lets the router's model set be configured
-    without touching code.
+    references an unknown tier/provider. This lets the router's model set be
+    configured without touching code.
+
+    The YAML may define a ``providers:`` block mapping a provider name to its
+    ``base_url`` and ``api_key_env``. Each tier (and the classifier) can then
+    reference one of those providers via ``provider: <name>``. If no
+    ``providers:`` block is given, a single ``default`` provider (Ollama Cloud)
+    is used and every tier points at it — preserving the original behavior.
     """
     if path is None or not path.exists():
         return None
@@ -38,6 +51,25 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
     if not isinstance(data, dict):
         raise ValueError(f"Malformed models YAML at {path}: expected a mapping")
 
+    # --- Providers ---
+    providers: dict[str, ProviderSpec] = dict(DEFAULT_PROVIDERS)
+    raw_providers = data.get("providers") or {}
+    if raw_providers:
+        if not isinstance(raw_providers, dict):
+            raise ValueError("'providers' must be a mapping")
+        providers = {}
+        for name, pcfg in raw_providers.items():
+            if not isinstance(pcfg, dict) or not pcfg.get("base_url"):
+                raise ValueError(f"Provider '{name}' must define a 'base_url'")
+            providers[str(name)] = ProviderSpec(
+                base_url=str(pcfg["base_url"]).rstrip("/"),
+                api_key_env=str(pcfg.get("api_key_env", "OLLAMA_API_KEY")),
+            )
+        # Always ensure a "default" provider exists so tiers that don't specify
+        # one (or the classifier) still resolve.
+        providers.setdefault("default", DEFAULT_PROVIDERS["default"])
+
+    # --- Tiers ---
     tiers: dict[Tier, ModelSpec] = {}
     raw_tiers = data.get("tiers") or {}
     if not isinstance(raw_tiers, dict):
@@ -49,9 +81,15 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
             raise ValueError(f"Unknown tier '{tier_key}' in {path}")
         if not isinstance(spec, dict) or not spec.get("model"):
             raise ValueError(f"Tier '{tier_key}' must define a 'model'")
+        provider = str(spec.get("provider", "default"))
+        if provider not in providers:
+            raise ValueError(
+                f"Tier '{tier_key}' references unknown provider '{provider}' in {path}"
+            )
         tiers[tier] = ModelSpec(
             api_id=str(spec["model"]),
             description=str(spec.get("description", "")),
+            provider=provider,
         )
 
     # Require all four tiers.
@@ -59,8 +97,14 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
         if tier not in tiers:
             raise ValueError(f"Missing tier '{tier.value}' in models YAML {path}")
 
+    # --- Classifier ---
     classifier = data.get("classifier") or {}
     classifier_model = str(classifier.get("model", "gemma4:31b"))
+    classifier_provider = str(classifier.get("provider", "default"))
+    if classifier_provider not in providers:
+        raise ValueError(
+            f"Classifier references unknown provider '{classifier_provider}' in {path}"
+        )
     min_classify_len = int(classifier.get("min_classify_len", 10))
 
     default_raw = data.get("default_tier")
@@ -73,7 +117,9 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
         tiers=tiers,
         default_tier=default_tier,
         classifier_model=classifier_model,
+        classifier_provider=classifier_provider,
         min_classify_len=min_classify_len,
+        providers=providers,
     )
 
 

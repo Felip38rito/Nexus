@@ -5,9 +5,11 @@ and streams the completion back from Ollama Cloud under that tier's model id.
 """
 from __future__ import annotations
 
-from typing import Any
 import hmac
 import logging
+import os
+from typing import Any
+
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -138,19 +140,28 @@ async def chat_completions(request: Request):
     else:
         routed_tier = await classify(prompt, settings)
 
-    routed_model = settings.models.tiers[routed_tier].api_id
+    routed_spec = settings.models.tiers[routed_tier]
+    routed_model = routed_spec.api_id
+    # Resolve which provider serves this tier (multi-provider support).
+    provider = settings.models.provider_for(routed_spec.provider)
 
     # LOGGING (async-safe, via stdlib logging): terminal + rotating file.
     snippet = prompt[:50].replace("\n", " ") + "..."
-    log.info("Tier=%s Model=%s Prompt=%s", routed_tier.value, routed_model, snippet)
+    log.info(
+        "Tier=%s Model=%s Provider=%s Prompt=%s",
+        routed_tier.value,
+        routed_model,
+        provider.base_url,
+        snippet,
+    )
 
     # Build the upstream body: swap the model id but keep everything else.
     upstream_body = dict(body)
     upstream_body["model"] = routed_model
 
-    target_url = f"{settings.ollama_base_url}/chat/completions"
+    target_url = f"{provider.base_url}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {settings.effective_api_key}",
+        "Authorization": f"Bearer {os.environ.get(provider.api_key_env, '')}",
         "Content-Type": "application/json",
     }
 

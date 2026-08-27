@@ -1,8 +1,8 @@
-# Model Router — configuração de modelos (tiers → modelos da Ollama Cloud).
+# Model Router — configuração de modelos (tiers → modelos + providers).
 #
-# Este arquivo define QUAIS modelos cada tier aponta e os thresholds do
-# classificador. Edite aqui e reinicie o router (ou aponte para outro arquivo
-# via ROUTER_MODELS_YAML no .env).
+# Este arquivo define QUAIS modelos cada tier aponta, QUAIS providers existem,
+# e os thresholds do classificador. Edite aqui e reinicie o router (ou aponte
+# para outro arquivo via ROUTER_MODELS_YAML no .env).
 #
 # IMPORTANTE: use os API ids REAIS do /v1/models (sem sufixo ":cloud" — esse é
 # alias do Hermes e daria 404 na API).
@@ -10,7 +10,21 @@
 # Tier padrão quando o classificador falha ou não decide.
 default_tier: air
 
-# Tiers fixos (mini/air/pro/ultra). Cada tier tem o modelo e uma descrição.
+# Providers disponíveis. Cada provider tem um base_url (endpoint OpenAI-compatível)
+# e o nome da env var que guarda a chave daquele provider.
+# Se você não definir este bloco, um provider "default" (Ollama Cloud) é usado
+# e todos os tiers apontam para ele.
+providers:
+  default:
+    base_url: https://ollama.com/v1
+    api_key_env: OLLAMA_API_KEY
+  # Exemplo: um segundo provider (descomente para usar).
+  # gemini:
+  #   base_url: https://generativelanguage.googleapis.com/v1beta
+  #   api_key_env: GEMINI_API_KEY
+
+# Tiers fixos (mini/air/pro/ultra). Cada tier tem o modelo, uma descrição e,
+# opcionalmente, o provider que o serve (default: "default").
 tiers:
   mini:
     model: gemma4:31b
@@ -26,10 +40,10 @@ tiers:
     description: "deep synthesis, whole-architecture, adversarial analysis"
 
 # Classificador.
-# - classifier_model: modelo usado na decisão qualitativa (JSON). É o decisor
-#   PRIMÁRIO — a decisão de tier é qualitativa, não keyword-matching.
-# - min_classify_len: prompts menores que isso = chatter trivial (mini). Só
-#   pega saudações/curtos; prompts técnicos curtos vão pro LLM decidir.
+# - model: modelo usado na decisão qualitativa (JSON). É o decisor PRIMÁRIO.
+# - provider: qual provider serve o classificador (default: "default").
+# - min_classify_len: prompts menores que isso = chatter trivial (mini).
 classifier:
   model: gemma4:31b
+  provider: default
   min_classify_len: 10

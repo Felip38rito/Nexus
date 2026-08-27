@@ -112,3 +112,84 @@ def test_settings_from_env_loads_yaml(monkeypatch, tmp_path: Path):
     assert s.models.min_classify_len == 40
     assert s.models.tiers[Tier.PRO].api_id == "deepseek-v4-pro:0813"
     assert s.models.tiers[Tier.ULTRA].api_id == "kimi-k3"
+
+
+def _multi_provider_yaml() -> str:
+    return """\
+default_tier: air
+providers:
+  default:
+    base_url: https://ollama.com/v1
+    api_key_env: OLLAMA_API_KEY
+  gemini:
+    base_url: https://generativelanguage.googleapis.com/v1beta
+    api_key_env: GEMINI_API_KEY
+tiers:
+  mini:
+    model: gemma4:31b
+    description: "fast"
+  air:
+    model: deepseek-v4-flash:0731
+    description: "default"
+  pro:
+    model: gemini-2.5-pro
+    description: "complex"
+    provider: gemini
+  ultra:
+    model: kimi-k3
+    description: "hard"
+classifier:
+  model: gemma4:31b
+  provider: default
+  min_classify_len: 40
+"""
+
+
+def test_load_models_yaml_multi_provider(tmp_path: Path):
+    yaml_path = tmp_path / "models.yaml"
+    yaml_path.write_text(_multi_provider_yaml())
+    models = load_models_yaml(yaml_path)
+    assert models is not None
+    # Tiers default to "default" provider unless overridden.
+    assert models.tiers[Tier.MINI].provider == "default"
+    assert models.tiers[Tier.AIR].provider == "default"
+    # The pro tier points at the gemini provider.
+    assert models.tiers[Tier.PRO].provider == "gemini"
+    assert models.tiers[Tier.PRO].api_id == "gemini-2.5-pro"
+    # Classifier provider resolved.
+    assert models.classifier_provider == "default"
+    # Providers table populated.
+    assert "gemini" in models.providers
+    assert models.providers["gemini"].base_url == "https://generativelanguage.googleapis.com/v1beta"
+    assert models.providers["gemini"].api_key_env == "GEMINI_API_KEY"
+    # provider_for resolves both.
+    assert models.provider_for("gemini").api_key_env == "GEMINI_API_KEY"
+    assert models.provider_for("default").base_url == "https://ollama.com/v1"
+
+
+def test_load_models_yaml_unknown_provider_raises(tmp_path: Path):
+    yaml_path = tmp_path / "bad.yaml"
+    yaml_path.write_text(
+        "tiers:\n"
+        "  mini:\n    model: m\n    provider: nope\n"
+        "  air:\n    model: y\n"
+        "  pro:\n    model: z\n"
+        "  ultra:\n    model: w\n"
+    )
+    with pytest.raises(ValueError, match="unknown provider 'nope'"):
+        load_models_yaml(yaml_path)
+
+
+def test_load_models_yaml_provider_requires_base_url(tmp_path: Path):
+    yaml_path = tmp_path / "bad.yaml"
+    yaml_path.write_text(
+        "providers:\n"
+        "  broken:\n    api_key_env: X\n"
+        "tiers:\n"
+        "  mini:\n    model: m\n"
+        "  air:\n    model: y\n"
+        "  pro:\n    model: z\n"
+        "  ultra:\n    model: w\n"
+    )
+    with pytest.raises(ValueError, match="must define a 'base_url'"):
+        load_models_yaml(yaml_path)
