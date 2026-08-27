@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Sobe o router lendo a OLLAMA_API_KEY de ~/.hermes/.env (fora do repo).
-# O .env do Hermes não entra no git, então nenhuma credencial vaza pro repo.
+# Sobe o router. Lê a chave do provider de .env (no repo) — ou, como fallback
+# legado, de ~/.hermes/.env. Nenhuma credencial vai pro git.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Carrega OLLAMA_API_KEY de ~/.hermes/.env (é a fonte da key do usuário).
-HERMES_ENV="${HERMES_ENV:-$HOME/.hermes/.env}"
-if [ -f "$HERMES_ENV" ]; then
-  # shellcheck disable=SC1090
-  set -a; source "$HERMES_ENV"; set +a
+# 1) Repo-local .env (padrão para instalações novas / "a galera").
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  set -a; source "$SCRIPT_DIR/.env"; set +a
+# 2) Fallback legado: .env do Hermes (setup original do Felipe).
+elif [ -f "${HERMES_ENV:-$HOME/.hermes/.env}" ]; then
+  set -a; source "${HERMES_ENV:-$HOME/.hermes/.env}"; set +a
 fi
 
 export PYTHONPATH="${PYTHONPATH:-}:$SCRIPT_DIR/src"

@@ -363,7 +363,7 @@ def main() -> int:
         models = fetch_models(args.router_url)
     except Exception as exc:  # noqa: BLE001
         print(f"✗ Could not fetch models from {args.router_url}: {exc}")
-        print("  Is the Nexus router running? (routerctl status)")
+        print("  Is the Nexus router running? (nexusctl status)")
         return 1
 
     if not config_path.exists():

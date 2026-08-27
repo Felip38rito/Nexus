@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# nexusctl — manage the Nexus Model Router as a background service.
+#
+# Supports macOS (launchd) and Linux (systemd).
+# Self-locating: derives the repo path from its own location.
+#
+#   export PATH="$PATH:/path/to/nexus-repo"
+#   nexusctl install    # generate + load the service
+#   nexusctl status
+#   nexusctl restart
+#
+# The service label defaults to "nexus"; override with NEXUS_LABEL.
+
+set -euo pipefail
+
+# --- Resolve repo location -------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$SCRIPT_DIR"
+
+# --- Config ----------------------------------------------------------------
+LABEL="${NEXUS_LABEL:-nexus}"
+DOMAIN="gui/$(id -u)"
+RUN_SH="$REPO_DIR/run.sh"
+PORT="${ROUTER_PORT:-9000}"
+
+# OS Detection
+OS="$(uname)"
+if [ "$OS" = "Darwin" ]; then
+    BACKEND="launchd"
+    PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+elif [ "$OS" = "Linux" ]; then
+    BACKEND="systemd"
+    SERVICE_FILE="$HOME/.config/systemd/user/$LABEL.service"
+else
+    echo "❌ Unsupported OS: $OS. Only macOS and Linux are supported."
+    exit 1
+fi
+
+# Path to logs (still used by run.sh and macOS; Linux uses journald)
+LOG_OUT="$REPO_DIR/logs/router.out.log"
+LOG_ERR="$REPO_DIR/logs/router.err.log"
+
+usage() {
+    cat <<EOF
+Usage: nexusctl <command>
+
+Commands:
+  install     Generate the service config and load it
+  uninstall   Stop and remove the service config
+  start       Start the service
+  stop        Stop the service
+  restart     Stop then start
+  status      Show whether the service is running
+  logs        Print the last 100 lines of logs
+  tail        Follow the logs live
+
+The service label defaults to "$LABEL". Override with NEXUS_LABEL.
+EOF
+    exit 1
+}
+
+# --- Path Helper -----------------------------------------------------------
+# Detect the directory holding 'uv' so the service can find it.
+get_uv_path() {
+    local uv_path
+    uv_path="$(command -v uv 2>/dev/null || true)"
+    if [ -n "$uv_path" ]; then
+        echo "$(dirname "$uv_path"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    else
+        echo "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    fi
+}
+
+# --- Backends: macOS (launchd) ----------------------------------------------
+_mac_install() {
+    mkdir -p "$HOME/Library/LaunchAgents" "$REPO_DIR/logs"
+    cat > "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>$RUN_SH</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$REPO_DIR</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ROUTER_PORT</key>
+        <string>$PORT</string>
+        <key>PATH</key>
+        <string>$(get_uv_path)</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>$LOG_OUT</string>
+    <key>StandardErrorPath</key>
+    <string>$LOG_ERR</string>
+</dict>
+</plist>
+EOF
+    echo "✅ Wrote $PLIST"
+    _mac_start
+}
+
+_mac_uninstall() {
+    _mac_stop
+    rm -f "$PLIST"
+    echo "🗑  Removed $PLIST"
+}
+
+_mac_start() {
+    if launchctl list "$LABEL" &>/dev/null; then
+        echo "ℹ️  Nexus already running."
+    else
+        echo "🚀 Starting Nexus (launchd)..."
+        launchctl bootstrap "$DOMAIN" "$PLIST"
+    fi
+}
+
+_mac_stop() {
+    if launchctl list "$LABEL" &>/dev/null; then
+        echo "🛑 Stopping Nexus..."
+        launchctl bootout "$DOMAIN/$LABEL" || true
+    fi
+}
+
+_mac_status() {
+    if launchctl list "$LABEL" &>/dev/null; then
+        echo "🔍 Nexus is running (label $LABEL):"
+        launchctl list "$LABEL"
+    else
+        echo "🔍 Nexus is NOT running."
+    fi
+}
+
+# --- Backends: Linux (systemd) ----------------------------------------------
+_lin_install() {
+    mkdir -p "$HOME/.config/systemd/user" "$REPO_DIR/logs"
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Nexus Model Router
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$REPO_DIR
+ExecStart=$RUN_SH
+Restart=always
+RestartSec=10
+Environment=ROUTER_PORT=$PORT
+Environment=PATH=$(get_uv_path)
+
+[Install]
+WantedBy=default.target
+EOF
+    echo "✅ Wrote $SERVICE_FILE"
+    systemctl --user daemon-reload
+    systemctl --user enable "$LABEL.service"
+    _lin_start
+}
+
+_lin_uninstall() {
+    _lin_stop
+    rm -f "$SERVICE_FILE"
+    systemctl --user daemon-reload
+    echo "🗑  Removed $SERVICE_FILE"
+}
+
+_lin_start() {
+    echo "🚀 Starting Nexus (systemd)..."
+    systemctl --user start "$LABEL.service"
+}
+
+_lin_stop() {
+    echo "🛑 Stopping Nexus..."
+    systemctl --user stop "$LABEL.service"
+}
+
+_lin_status() {
+    if systemctl --user is-active --quiet "$LABEL.service"; then
+        echo "🔍 Nexus is running (label $LABEL):"
+        systemctl --user status "$LABEL.service"
+    else
+        echo "🔍 Nexus is NOT running."
+    fi
+}
+
+# --- Dispatcher -------------------------------------------------------------
+case "${1:-}" in
+    install)
+        if [ "$BACKEND" = "launchd" ]; then _mac_install; else _lin_install; fi
+        ;;
+    uninstall)
+        if [ "$BACKEND" = "launchd" ]; then _mac_uninstall; else _lin_uninstall; fi
+        ;;
+    start)
+        if [ "$BACKEND" = "launchd" ]; then _mac_start; else _lin_start; fi
+        ;;
+    stop)
+        if [ "$BACKEND" = "launchd" ]; then _mac_stop; else _lin_stop; fi
+        ;;
+    restart)
+        if [ "$BACKEND" = "launchd" ]; then _mac_stop; _mac_start; else _lin_stop; _lin_start; fi
+        ;;
+    status)
+        if [ "$BACKEND" = "launchd" ]; then _mac_status; else _lin_status; fi
+        ;;
+    logs)
+        if [ "$BACKEND" = "launchd" ]; then
+            tail -n 100 "$LOG_OUT"
+            echo "--- Errors ---"
+            tail -n 100 "$LOG_ERR"
+        else
+            journalctl --user -n 100 -u "$LABEL.service"
+        fi
+        ;;
+    tail)
+        if [ "$BACKEND" = "launchd" ]; then
+            tail -f "$LOG_OUT" "$LOG_ERR"
+        else
+            journalctl --user -f -u "$LABEL.service"
+        fi
+        ;;
+    *)
+        usage
+        ;;
+esac

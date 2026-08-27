@@ -69,6 +69,14 @@ cp .env.example .env        # fill in your provider key
 PYTHONPATH=src uv run uvicorn model_router.main:app --host 127.0.0.1 --port 9000
 ```
 
+Or run it as a background service with `nexusctl` (see
+[Running as a service](#running-as-a-service-launchd--macos)):
+
+```bash
+export PATH="$PATH:$PWD"    # make nexusctl available
+nexusctl install            # generate plist + start at login
+```
+
 Tests:
 
 ```bash
@@ -373,19 +381,21 @@ natively at `/v1/responses` — no bridge needed. Point the Copilot provider at
 the router with environment variables (e.g. in `~/.zshrc`):
 
 ```bash
+# GitHub Copilot CLI -> Nexus Model Router
 export COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:9000/v1
 export COPILOT_PROVIDER_API_KEY=router    # router without auth accepts any value
-export COPILOT_PROVIDER_WIRE_API=responses  # use the /v1/responses shim
-export COPILOT_MODEL=adaptive              # the router decides the tier for each request
+export COPILOT_MODEL=adaptive             # <-- the router decides the tier per request
 ```
 
-- `COPILOT_PROVIDER_WIRE_API=responses` is what makes the router's
-  `/v1/responses` shim handle the traffic (it translates to `/v1/chat/completions`
-  upstream). Copilot also works over `chat_completions` if you prefer.
-- `COPILOT_MODEL=adaptive` routes **every** request through the classifier
-  (the router decides the cheapest adequate tier). To pin a tier instead, set it
-  to `mini`, `air`, `pro`, or `ultra` — or to a raw upstream api id
+- **`COPILOT_MODEL=adaptive` is the recommended default.** It routes **every**
+  request through the classifier, so the router picks the cheapest adequate
+  tier (`mini`/`air`/`pro`/`ultra`) for each prompt. To pin a tier instead, set
+  it to `mini`, `air`, `pro`, or `ultra` — or to a raw upstream api id
   (e.g. `deepseek-v4-pro:0813`) for transparent mode.
+- **`COPILOT_PROVIDER_WIRE_API=responses` is optional.** The router implements
+  `/v1/responses` natively, so Copilot works out of the box. You only need to
+  set `WIRE_API=responses` if you want to be explicit; Copilot also works over
+  `chat_completions` if you prefer.
 - The tiers resolve to Ollama Cloud, so the router's `.env` still needs the
   upstream key (`OLLAMA_API_KEY`).
 - If you enable `ROUTER_API_KEY`, set `COPILOT_PROVIDER_API_KEY` to the real
@@ -396,7 +406,7 @@ export COPILOT_MODEL=adaptive              # the router decides the tier for eac
 > cheap tiers on the day-to-day and escalates to `pro`/`ultra` only when a
 > prompt truly needs it. To go back to Copilot's cloud models, unset these
 > variables (`unset COPILOT_PROVIDER_BASE_URL COPILOT_PROVIDER_API_KEY
-> COPILOT_PROVIDER_WIRE_API COPILOT_MODEL`).
+> COPILOT_MODEL`).
 
 ### Syncing the tiers into OpenCode
 
@@ -438,11 +448,11 @@ Options:
 > **How to configure the tiers (mini/air/pro/ultra):** the tier *names* come
 > straight from the router's `/v1/models` (edit `router.models.yaml` — see
 > [Model configuration](#model-configuration-yaml) — then restart with
-> `routerctl.sh restart`). Re-run the sync and the OpenCode provider updates to
+> `nexusctl restart`). Re-run the sync and the OpenCode provider updates to
 > match. If the router advertises a new tier, it appears; if one is removed,
 > it disappears from the OpenCode provider too.
 
-> **How to run it correctly:** the router must be up (`routerctl.sh status`)
+> **How to run it correctly:** the router must be up (`nexusctl status`)
 > before syncing. If it's down, the script fails fast with a clear message and
 > leaves your config untouched. To keep OpenCode always in step, run the sync
 > after every router restart (or whenever you change `router.models.yaml`).
@@ -485,24 +495,44 @@ Add a `router` provider in `~/.config/opencode/opencode.jsonc`:
 > [Syncing the tiers into OpenCode](#syncing-the-tiers-into-opencode)) so the
 > model list always matches what the router advertises.
 
-## Running as a service (launchd — macOS)
+## Running as a service
 
-To have the router start at login and restart itself on crash, use a LaunchAgent:
-
-- Plist: `~/Library/LaunchAgents/br.com.felp38rito.nexus.plist`
-  (`RunAtLoad` + `KeepAlive` + `ThrottleInterval=10`; logs in `logs/`).
-- Wrapper: `routerctl.sh` — `start | stop | restart | status | logs | tail`.
+To have the router start at login and restart itself on crash, use a background
+service. The `nexusctl` script manages the whole lifecycle and **self-locates**
+— it derives the repo path from its own location, so you can drop the repo
+folder anywhere and add it to your `PATH`:
 
 ```bash
-./routerctl.sh status     # is it running?
-./routerctl.sh restart    # after changing code/config
-./routerctl.sh tail       # follow logs live
+# add the repo folder to your PATH (e.g. in ~/.zshrc)
+export PATH="$PATH:$HOME/Developer/model-router"
+
+nexusctl install     # generate the service config + load it
+nexusctl status      # is it running?
+nexusctl restart      # after changing code/config
+nexusctl tail        # follow logs live
+nexusctl uninstall   # stop + remove the service config
 ```
 
-> **Pitfall:** launchd doesn't source your `~/.zshrc`, so its minimal PATH
-> can't find `uv` (which usually lives in `~/.local/bin`). The plist MUST set
-> `EnvironmentVariables.PATH` to include the `uv` directory, otherwise the
-> service crash-loops with `exec: uv: not found`.
+Commands: `install | uninstall | start | stop | restart | status | logs | tail`.
+
+`nexusctl` auto-detects the OS and uses the native service manager:
+
+- **macOS → launchd**: writes a plist to `~/Library/LaunchAgents/<label>.plist`
+  (`RunAtLoad` + `KeepAlive` + `ThrottleInterval=10`; logs in `logs/`).
+- **Linux → systemd (user unit)**: writes a unit to
+  `~/.config/systemd/user/<label>.service` (`Restart=always`; logs via
+  `journalctl --user`).
+
+The service label defaults to `nexus`; override with `NEXUS_LABEL`
+(e.g. `NEXUS_LABEL=com.example.nexus nexusctl install`).
+
+`routerctl.sh` is kept as a deprecated alias for `nexusctl` so existing
+scripts/aliases keep working.
+
+> **Pitfall (macOS):** launchd doesn't source your `~/.zshrc`, so its minimal
+> PATH can't find `uv` (which usually lives in `~/.local/bin`). `nexusctl
+> install` auto-detects the `uv` directory and bakes it into the plist's
+> `EnvironmentVariables.PATH`. If you move `uv`, re-run `nexusctl install`.
 
 ## Security
 
