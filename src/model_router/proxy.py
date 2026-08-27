@@ -237,4 +237,16 @@ async def responses_shim(request: Request):
     chat_body = dict(body)
     chat_body["messages"] = chat_messages
 
+    # Translate tools flat -> nested and attach them to the Chat body.
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        chat_body["tools"] = responses_translate.translate_tools(tools)
+    # parallel_tool_calls pass-through
+    if "parallel_tool_calls" in body:
+        chat_body["parallel_tool_calls"] = body["parallel_tool_calls"]
+
+    # Ask upstream to include usage in the final chunk (needed for metering).
+    if chat_body.get("stream"):
+        chat_body["stream_options"] = {"include_usage": True}
+
     return await _process_chat(request, chat_body, settings, responses_mode=True)
