@@ -82,6 +82,22 @@ def _build_function_call_item(
     }
 
 
+def _normalize_usage(usage: Any) -> dict[str, int]:
+    """Normalize upstream usage into the Responses API shape.
+
+    Chat Completions uses prompt_tokens/completion_tokens/total_tokens; the
+    Responses API uses input_tokens/output_tokens/total_tokens. The Codex CLI
+    strictly requires input_tokens to be present in response.completed.
+    """
+    if not isinstance(usage, dict):
+        return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    return {
+        "input_tokens": int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0),
+        "output_tokens": int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0),
+        "total_tokens": int(usage.get("total_tokens", 0) or 0),
+    }
+
+
 def translate_tools(tools: list) -> list[dict[str, Any]]:
     """Translate Responses API `tools` (flat) into Chat Completions `tools` (nested).
 
@@ -415,7 +431,7 @@ async def translate_stream(
         model=model,
         created_at=created_at,
         output_items=output_items,
-        usage=usage,
+        usage=_normalize_usage(usage),
         status=status,
     )
     yield emit_event("response.completed", {"response": final_response})
@@ -475,6 +491,6 @@ def translate_non_stream(
         model=model,
         created_at=created_at,
         output_items=output_items,
-        usage=usage,
+        usage=_normalize_usage(usage),
         status=status,
     )
