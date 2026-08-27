@@ -79,8 +79,8 @@ uv run pytest
 
 | Var | Default | Description |
 |---|---|---|
-| `OLLAMA_API_KEY` | — | upstream provider key (required) |
-| `OLLAMA_BASE_URL` | `https://ollama.com/v1` | provider `/v1` endpoint |
+| `OLLAMA_API_KEY` | — | key for the `default` provider (Ollama Cloud) |
+| `OLLAMA_BASE_URL` | `https://ollama.com/v1` | base URL for the `default` provider |
 | `ROUTER_HOST` | `127.0.0.1` | router bind address |
 | `ROUTER_PORT` | `9000` | router port |
 | `ROUTER_DEFAULT_TIER` | `air` | last-resort fallback |
@@ -88,13 +88,30 @@ uv run pytest
 | `ROUTER_API_KEY` | (empty) | if set, clients must send `Authorization: Bearer <key>` |
 | `ROUTER_MODELS_YAML` | `router.models.yaml` | path to a custom models YAML |
 
+> Additional providers (OpenAI, Anthropic, Gemini, …) are configured in the
+> YAML `providers:` block and use their **own** env vars (e.g. `OPENAI_API_KEY`,
+> `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). `OLLAMA_API_KEY`/`OLLAMA_BASE_URL`
+> only back the `default` provider.
+
 ## Model configuration (YAML)
 
-The 4 tiers are fixed; only the models/descriptions change. Edit
-`router.models.yaml` (or point to another with `ROUTER_MODELS_YAML`):
+The 4 tiers are fixed; the models, their providers, and the classifier are all
+configured in `router.models.yaml` (or another file via `ROUTER_MODELS_YAML`).
 
 ```yaml
 default_tier: air
+
+# Named upstream endpoints. Each tier (and the classifier) can point at one.
+# If you omit this block, a single "default" provider (Ollama Cloud) is used
+# and every tier points at it.
+providers:
+  default:
+    base_url: https://ollama.com/v1
+    api_key_env: OLLAMA_API_KEY
+  # gemini:
+  #   base_url: https://generativelanguage.googleapis.com/v1beta
+  #   api_key_env: GEMINI_API_KEY
+
 tiers:
   mini:
     model: gemma4:31b          # provider's real API id
@@ -105,11 +122,14 @@ tiers:
   pro:
     model: deepseek-v4-pro:0813
     description: "raw coding power"
+    # provider: gemini        # optional — defaults to "default"
   ultra:
     model: kimi-k3
     description: "deep synthesis, whole-architecture"
+
 classifier:
   model: gemma4:31b            # primary LLM decider (JSON decision)
+  provider: default            # which provider serves the classifier
   min_classify_len: 10
 ```
 
@@ -117,23 +137,35 @@ classifier:
 > not tool aliases (e.g. `deepseek-v4-flash:cloud` is a Hermes alias and returns
 > 404 on the API). Check the real ids with `curl <base_url>/v1/models`.
 
-> **The classifier also runs on the provider.** `classifier.model` must be a
-> model the provider has (preferably a cheap one). It uses the same
-> `OLLAMA_BASE_URL`/`OLLAMA_API_KEY` as the upstream.
+> **Multi-provider:** each tier can point at a different provider via
+> `provider: <name>`. The classifier can also run on its own provider. This
+> lets you, for example, run `air` on Ollama Cloud and `pro` on Gemini/OpenAI/
+> Anthropic. Each provider's key is read from its `api_key_env` variable.
 
 ## Supported providers
 
-The router is agnostic. To switch providers, change **3 things**:
-`OLLAMA_BASE_URL`, `OLLAMA_API_KEY`, and the tier mapping in the YAML.
+The router is **provider-agnostic** and **multi-provider**: you can run every
+tier on one provider, or spread tiers across several. Each provider is a named
+entry in the YAML `providers:` block with a `base_url` and an `api_key_env`.
 
-### Ollama Cloud (the example used here)
-
-```bash
-export OLLAMA_API_KEY="<your-key>"
-export OLLAMA_BASE_URL="https://ollama.com/v1"
-```
+To add a provider, define it in `router.models.yaml` and set its key in `.env`:
 
 ```yaml
+providers:
+  <name>:
+    base_url: <openai-compatible /v1 endpoint>
+    api_key_env: <ENV_VAR_HOLDING_THE_KEY>
+```
+
+Then point any tier at it with `provider: <name>`.
+
+### Ollama Cloud (the default)
+
+```yaml
+providers:
+  default:
+    base_url: https://ollama.com/v1
+    api_key_env: OLLAMA_API_KEY
 tiers:
   mini:    { model: gemma4:31b,             description: "trivial/discussion" }
   air:     { model: deepseek-v4-flash:0731, description: "default day-to-day" }
@@ -145,12 +177,11 @@ classifier:
 
 ### Local Ollama
 
-```bash
-export OLLAMA_API_KEY="ollama"            # local doesn't auth; any value
-export OLLAMA_BASE_URL="http://127.0.0.1:11434/v1"
-```
-
 ```yaml
+providers:
+  local:
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: OLLAMA_API_KEY   # local doesn't auth; any value
 tiers:
   mini:    { model: llama3.2:3b,          description: "trivial/discussion" }
   air:     { model: qwen2.5:7b,           description: "default day-to-day" }
@@ -162,12 +193,11 @@ classifier:
 
 ### OpenAI
 
-```bash
-export OLLAMA_API_KEY="sk-..."            # your OpenAI key
-export OLLAMA_BASE_URL="https://api.openai.com/v1"
-```
-
 ```yaml
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
 tiers:
   mini:    { model: gpt-4o-mini,          description: "trivial/discussion" }
   air:     { model: gpt-4o-mini,          description: "default day-to-day" }
@@ -177,14 +207,35 @@ classifier:
   model: gpt-4o-mini
 ```
 
-### OpenRouter
-
-```bash
-export OLLAMA_API_KEY="sk-or-..."         # your OpenRouter key
-export OLLAMA_BASE_URL="https://openrouter.ai/api/v1"
-```
+### Anthropic
 
 ```yaml
+providers:
+  anthropic:
+    base_url: https://api.anthropic.com/v1
+    api_key_env: ANTHROPIC_API_KEY
+tiers:
+  mini:    { model: claude-3-5-haiku-latest, description: "trivial/discussion" }
+  air:     { model: claude-3-5-haiku-latest, description: "default day-to-day" }
+  pro:     { model: claude-3-5-sonnet-latest, description: "reasoning/design" }
+  ultra:   { model: claude-3-7-sonnet-latest, description: "hard bug/refactor" }
+classifier:
+  model: claude-3-5-haiku-latest
+```
+
+> **Note:** Anthropic's native API is **not** OpenAI-compatible (it uses a
+> different request/response shape). To route Anthropic through Nexus, use an
+> OpenAI-compatible gateway in front of it (e.g. OpenRouter, or Anthropic's
+> own `/v1/messages` is not supported directly). The example above assumes an
+> OpenAI-compatible endpoint.
+
+### OpenRouter
+
+```yaml
+providers:
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
 tiers:
   mini:    { model: meta-llama/llama-3.1-8b-instruct, description: "trivial/discussion" }
   air:     { model: anthropic/claude-3.5-haiku,       description: "default day-to-day" }
@@ -196,12 +247,11 @@ classifier:
 
 ### Groq
 
-```bash
-export OLLAMA_API_KEY="gsk_..."           # your Groq key
-export OLLAMA_BASE_URL="https://api.groq.com/openai/v1"
-```
-
 ```yaml
+providers:
+  groq:
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
 tiers:
   mini:    { model: llama-3.1-8b-instant, description: "trivial/discussion" }
   air:     { model: llama-3.3-70b-versatile, description: "default day-to-day" }
@@ -213,6 +263,25 @@ classifier:
 
 > The model ids above are examples — check your provider's real ids with
 > `curl <base_url>/v1/models` before using them.
+
+### Mixing providers across tiers
+
+You can spread tiers across providers. Example: `air` on Ollama Cloud, `pro`
+on OpenAI, `ultra` on Anthropic:
+
+```yaml
+providers:
+  default:  { base_url: https://ollama.com/v1, api_key_env: OLLAMA_API_KEY }
+  openai:   { base_url: https://api.openai.com/v1, api_key_env: OPENAI_API_KEY }
+  anthropic:{ base_url: <openai-compatible anthropic gateway>, api_key_env: ANTHROPIC_API_KEY }
+tiers:
+  mini:    { model: gemma4:31b,             description: "trivial/discussion" }
+  air:     { model: deepseek-v4-flash:0731, description: "default day-to-day" }
+  pro:     { model: gpt-4o, provider: openai, description: "reasoning/design" }
+  ultra:   { model: claude-3-7-sonnet-latest, provider: anthropic, description: "hard bug/refactor" }
+classifier:
+  model: gemma4:31b
+```
 
 ## Using it (clients)
 
@@ -405,13 +474,15 @@ To have the router start at login and restart itself on crash, use a LaunchAgent
 
 ## Security
 
-- The provider key is read from env (or `.env`), **never** committed.
+- Provider keys are read from env (or `.env`), **never** committed.
 - `.gitignore` covers `.env`, `.venv/`, `logs/`, `router.log`.
 - `yaml.safe_load` (no YAML RCE).
 - Default bind on `127.0.0.1` (not exposed to the network).
 - Optional auth via `ROUTER_API_KEY` (Bearer).
+- Each provider's key lives in its own env var (e.g. `OLLAMA_API_KEY`,
+  `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) — set them in `.env`, which is git-ignored.
 
 ## Tests / verification
 
-- 33 unit tests (`classify`, `config`, `proxy`) with MockTransport.
+- 49 unit tests (`classify`, `config`, `proxy`, `sync-opencode`) with MockTransport.
 - Real smoke test against Ollama Cloud validated 2026-08-25.
