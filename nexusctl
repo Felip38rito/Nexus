@@ -42,7 +42,7 @@ LOG_ERR="$REPO_DIR/logs/router.err.log"
 
 usage() {
     cat <<EOF
-Usage: nexusctl <command>
+Usage: nexusctl [--port N] [--label NAME] <command>
 
 Commands:
   install     Generate the service config and load it
@@ -54,7 +54,11 @@ Commands:
   logs        Print the last 100 lines of logs
   tail        Follow the logs live
 
-The service label defaults to "$LABEL". Override with NEXUS_LABEL.
+Flags:
+  --port N     Override the router port (default: 9000)
+  --label NAME Override the service label (default: nexus)
+
+The service label defaults to "nexus". Override with NEXUS_LABEL.
 EOF
     exit 1
 }
@@ -196,7 +200,44 @@ _lin_status() {
 }
 
 # --- Dispatcher -------------------------------------------------------------
-case "${1:-}" in
+# Parse global flags (--port, --label) that may appear before or after the
+# subcommand, then dispatch.
+CMD=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --port)
+            if [ -z "${2:-}" ]; then
+                echo "❌ --port requires a value" >&2
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]] || (( $2 < 1 || $2 > 65535 )); then
+                echo "❌ --port must be an integer between 1 and 65535 (got: $2)" >&2
+                exit 1
+            fi
+            PORT="$2"
+            shift 2
+            ;;
+        --label)
+            if [ -z "${2:-}" ]; then
+                echo "❌ --label requires a value" >&2
+                exit 1
+            fi
+            LABEL="$2"
+            shift 2
+            ;;
+        *)
+            if [ -z "$CMD" ]; then
+                CMD="$1"
+            else
+                echo "❌ Unknown argument: $1" >&2
+                usage
+            fi
+            shift
+            ;;
+    esac
+done
+
+case "$CMD" in
     install)
         if [ "$BACKEND" = "launchd" ]; then _mac_install; else _lin_install; fi
         ;;
