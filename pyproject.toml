@@ -1,5 +1,5 @@
 [project]
-name = "model-router"
+name = "nexus"
 version = "0.1.0"
 description = "Local OpenAI-compatible proxy that routes each request to the cheapest adequate Ollama Cloud model."
 requires-python = ">=3.11"
