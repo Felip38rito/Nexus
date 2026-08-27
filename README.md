@@ -366,6 +366,38 @@ hermes config set model.aliases.ultra router/ultra
 > through it. To undo, restore the previous provider:
 > `hermes config set model.provider ollama-cloud` (or whichever you used).
 
+### Copilot CLI
+
+The Copilot CLI speaks the **Responses API**, which the router implements
+natively at `/v1/responses` — no bridge needed. Point the Copilot provider at
+the router with environment variables (e.g. in `~/.zshrc`):
+
+```bash
+export COPILOT_PROVIDER_BASE_URL=http://127.0.0.1:9000/v1
+export COPILOT_PROVIDER_API_KEY=router    # router without auth accepts any value
+export COPILOT_PROVIDER_WIRE_API=responses  # use the /v1/responses shim
+export COPILOT_MODEL=adaptive              # the router decides the tier for each request
+```
+
+- `COPILOT_PROVIDER_WIRE_API=responses` is what makes the router's
+  `/v1/responses` shim handle the traffic (it translates to `/v1/chat/completions`
+  upstream). Copilot also works over `chat_completions` if you prefer.
+- `COPILOT_MODEL=adaptive` routes **every** request through the classifier
+  (the router decides the cheapest adequate tier). To pin a tier instead, set it
+  to `mini`, `air`, `pro`, or `ultra` — or to a raw upstream api id
+  (e.g. `deepseek-v4-pro:0813`) for transparent mode.
+- The tiers resolve to Ollama Cloud, so the router's `.env` still needs the
+  upstream key (`OLLAMA_API_KEY`).
+- If you enable `ROUTER_API_KEY`, set `COPILOT_PROVIDER_API_KEY` to the real
+  bearer token.
+
+> ⚠ Pointing Copilot at the router sends **all** Copilot traffic through it
+> (including tool-call loops). That's the point — the classifier keeps the
+> cheap tiers on the day-to-day and escalates to `pro`/`ultra` only when a
+> prompt truly needs it. To go back to Copilot's cloud models, unset these
+> variables (`unset COPILOT_PROVIDER_BASE_URL COPILOT_PROVIDER_API_KEY
+> COPILOT_PROVIDER_WIRE_API COPILOT_MODEL`).
+
 ### Syncing the tiers into OpenCode
 
 Unlike Hermes, **OpenCode does not auto-discover models** for custom
