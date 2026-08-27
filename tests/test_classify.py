@@ -105,9 +105,87 @@ async def test_llm_tier_handles_prose_around_json():
 @pytest.mark.asyncio
 async def test_llm_tier_fails_safe_to_none():
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, text="boom")
+        return httpx.Response(500, text="boom", request=request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     tier = await llm_tier("some prompt", api_key="k", client=client)
     await client.aclose()
     assert tier is None
+
+
+@pytest.mark.asyncio
+async def test_llm_tier_retries_on_500_then_succeeds():
+    """A 500 is transient — the classifier should retry and can succeed on a later attempt."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(500, text="boom", request=request)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"model": "pro"}'}}]},
+            request=request,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tier = await llm_tier("some prompt", api_key="k", client=client)
+    await client.aclose()
+    assert tier == Tier.PRO
+    assert calls["n"] == 2  # exactly one retry
+
+
+@pytest.mark.asyncio
+async def test_llm_tier_empty_body_returns_none():
+    """A 200 with an empty body must not raise a JSONDecodeError — it falls back to None."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tier = await llm_tier("some prompt", api_key="k", client=client)
+    await client.aclose()
+    assert tier is None
+
+
+@pytest.mark.asyncio
+async def test_llm_tier_non_json_content_type_returns_none():
+    """A 200 that came back as HTML/text (error page) must not be parsed as JSON."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"<html>oops</html>",
+            headers={"content-type": "text/html"},
+            request=request,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tier = await llm_tier("some prompt", api_key="k", client=client)
+    await client.aclose()
+    assert tier is None
+
+
+@pytest.mark.asyncio
+async def test_llm_tier_empty_content_returns_none():
+    """A 200 with valid JSON but empty content must fall back to None."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": ""}}]},
+            request=request,
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    tier = await llm_tier("some prompt", api_key="k", client=client)
+    await client.aclose()
+    assert tier is None
+
+
+def test_extract_json_object_handles_braces_in_string():
+    """A `}` inside a string value must not truncate the extracted object."""
+    from model_router.classify import _extract_json_object
+
+    text = 'Here: {"model": "air", "reason": "brace } inside", "x": 1} trailing'
+    obj = _extract_json_object(text)
+    assert obj is not None
+    assert obj["model"] == "air"
+    assert obj["reason"] == "brace } inside"

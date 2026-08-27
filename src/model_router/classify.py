@@ -14,6 +14,7 @@ it never fails the request.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -24,6 +25,19 @@ import httpx
 from .models import DEFAULT_TIER, RouterModels, Tier
 
 log = logging.getLogger("model_router.classify")
+
+# Classification is on the critical path of every request, so keep the upstream
+# call fast: a short total timeout with a couple of quick retries on transient
+# failures is better than letting each request hang for 30s before falling back.
+_CLASSIFY_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
+# max_tokens must leave headroom for the JSON decision even if the model emits a
+# little preamble before it; 120 was truncating the JSON and causing parse
+# failures. 256 keeps the reply cheap but safe.
+_CLASSIFY_MAX_TOKENS = 256
+# Transient HTTP statuses worth retrying (server-side/upstream blips).
+_RETRY_STATUS = {500, 502, 503, 504}
+# Attempts total (1 initial + up to 2 retries).
+_RETRY_ATTEMPTS = 3
 
 # Explicit model override wins over everything: "use deepseek-v4-pro", etc.
 # This is the ONLY keyword-style match left — it targets specific model ids,
@@ -100,6 +114,110 @@ Examples:
 {"model": "ultra", "reason": "revisar e melhorar o projeto, múltiplos módulos envolvidos"}"""
 
 
+def _extract_json_object(text: str) -> dict | None:
+    """Robustly extract the first top-level JSON object from a model reply.
+
+    Unlike a naive ``re.search(r"\\{.*?\\}", ...)`` (which breaks on a ``}``
+    inside a string), this uses ``raw_decode`` from the first ``{`` to the
+    *matching* closing brace, so embedded braces are handled correctly.
+    """
+    if not text:
+        return None
+    start = text.find("{")
+    if start == -1:
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        obj, _ = decoder.raw_decode(text, start)
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+async def _classify_once(
+    *,
+    api_key: str,
+    base_url: str,
+    classifier_model: str,
+    prompt: str,
+    client: httpx.AsyncClient,
+) -> httpx.Response:
+    """Issue a single classifier request to the upstream."""
+    body = {
+        "model": classifier_model,
+        "messages": [
+            {"role": "system", "content": LLM_SYSTEM},
+            {"role": "user", "content": prompt[:4000]},
+        ],
+        "temperature": 0,
+        "max_tokens": _CLASSIFY_MAX_TOKENS,
+        "stream": False,
+    }
+    resp = await client.post(
+        f"{base_url}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json=body,
+    )
+    return resp
+
+
+def _parse_tier_response(resp: httpx.Response) -> Tier | None:
+    """Parse a classifier HTTP response into a Tier, or None on any failure.
+
+    Returns None (and logs a precise reason) if the body is missing, not JSON,
+    empty, or contains no valid tier — the caller falls back to the default.
+    """
+    # Only accept a JSON content type; a 200 that came back as HTML/text means
+    # the upstream returned an error page we can't trust.
+    ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if ctype and ctype != "application/json":
+        log.warning(
+            "LLM classifier got non-JSON content-type %r (status %s); defaulting",
+            ctype,
+            resp.status_code,
+        )
+        return None
+
+    raw = resp.text
+    if not raw or not raw.strip():
+        log.warning("LLM classifier returned empty body (status %s); defaulting", resp.status_code)
+        return None
+
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        # Show a short body snippet so the failure isn't a mystery.
+        snippet = raw[:200].replace("\n", " ")
+        log.warning(
+            "LLM classifier returned invalid JSON (status %s): %r; defaulting",
+            resp.status_code,
+            snippet,
+        )
+        return None
+
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        log.warning("LLM classifier response missing choices/message/content; defaulting")
+        return None
+
+    if not content or not str(content).strip():
+        log.warning("LLM classifier returned empty content (status %s); defaulting", resp.status_code)
+        return None
+
+    obj = _extract_json_object(str(content))
+    if obj is None:
+        log.warning("LLM classifier reply had no parseable JSON object: %r; defaulting", str(content)[:200])
+        return None
+
+    candidate = str(obj.get("model", "")).strip().lower()
+    try:
+        return Tier(candidate)
+    except ValueError:
+        log.warning("LLM classifier returned unknown tier %r", candidate)
+        return None
+
+
 async def llm_tier(
     prompt: str,
     *,
@@ -108,43 +226,60 @@ async def llm_tier(
     classifier_model: str = "gemma4:31b",
     client: httpx.AsyncClient | None = None,
 ) -> Tier | None:
-    """Classify via a cheap LLM. Returns the tier or None on failure."""
+    """Classify via a cheap LLM, with retry on transient failures.
+
+    Returns the tier, or None on failure (the caller falls back to the default
+    tier). Never raises — the router must not break a request just because the
+    classifier is unavailable.
+    """
     own_client = client is None
-    client = client or httpx.AsyncClient(timeout=30.0)
+    if own_client:
+        client = httpx.AsyncClient(timeout=_CLASSIFY_TIMEOUT)
+
+    last_exc: Exception | None = None
     try:
-        body = {
-            "model": classifier_model,
-            "messages": [
-                {"role": "system", "content": LLM_SYSTEM},
-                {"role": "user", "content": prompt[:4000]},
-            ],
-            "temperature": 0,
-            "max_tokens": 120,
-            "stream": False,
-        }
-        resp = await client.post(
-            f"{base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=body,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"]
-        # Extract the first {...} block defensively (models sometimes add prose).
-        m = re.search(r"\{.*?\}", text, re.DOTALL)
-        parsed = json.loads(m.group(0)) if m else json.loads(text)
-        candidate = str(parsed.get("model", "")).strip().lower()
-        try:
-            return Tier(candidate)
-        except ValueError:
-            log.warning("LLM classifier returned unknown tier %r", candidate)
-            return None
-    except Exception as exc:  # noqa: BLE001 - classify must never break the request
-        log.warning("LLM classifier failed (%s); defaulting", exc)
-        return None
+        for attempt in range(_RETRY_ATTEMPTS):
+            if attempt > 0:
+                # Small exponential backoff with jitter (0.15s, 0.4s).
+                delay = 0.1 * (2 ** (attempt - 1)) + (0.05 * attempt)
+                await asyncio.sleep(delay)
+            try:
+                resp = await _classify_once(
+                    api_key=api_key,
+                    base_url=base_url,
+                    classifier_model=classifier_model,
+                    prompt=prompt,
+                    client=client,
+                )
+                if resp.status_code in _RETRY_STATUS:
+                    log.warning(
+                        "LLM classifier upstream %s on attempt %d; retrying",
+                        resp.status_code,
+                        attempt + 1,
+                    )
+                    last_exc = httpx.HTTPStatusError(
+                        f"status {resp.status_code}", request=resp.request, response=resp
+                    )
+                    continue
+                resp.raise_for_status()
+                tier = _parse_tier_response(resp)
+                return tier  # None means parse failure -> fall back (no retry needed)
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                # Network/connect blips are worth retrying.
+                last_exc = exc
+                log.warning("LLM classifier transport error on attempt %d: %s", attempt + 1, exc)
+                continue
+            except httpx.HTTPStatusError as exc:
+                # Non-retryable status (e.g. 401/404/429) — give up immediately.
+                last_exc = exc
+                log.warning("LLM classifier HTTP %s (%s); defaulting", exc.response.status_code, exc)
+                break
     finally:
         if own_client:
             await client.aclose()
+
+    log.warning("LLM classifier failed (%s); defaulting", last_exc)
+    return None
 
 
 async def classify(
