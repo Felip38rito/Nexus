@@ -1,11 +1,12 @@
-"""OpenAI-compatible relay: /v1/chat/completions + /v1/models.
+"""OpenAI-compatible relay: /v1/chat/completions + /v1/responses + /v1/models.
 
-The router accepts an OpenAI-format request, picks the cheapest adequate tier,
-and streams the completion back from Ollama Cloud under that tier's model id.
+The router accepts a request, picks the cheapest adequate tier,
+and streams the completion back from an upstream provider under that tier's model id.
 """
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
 from typing import Any
@@ -17,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from .classify import classify
 from .config import Settings
 from .models import Tier
+from . import responses as responses_translate
 
 log = logging.getLogger("model_router.proxy")
 
@@ -24,15 +26,7 @@ router = APIRouter()
 
 
 def _model_list_payload(models: "RouterModels") -> dict[str, Any]:
-    """Advertise the virtual + tier model ids the router understands.
-
-    The list IS the source of truth for what clients (e.g. the Hermes picker)
-    may select. It exposes:
-    - "adaptive"  -> the router decides the tier automatically.
-    - mini/air/pro/ultra -> transparently force that tier.
-    (The raw upstream api ids still work if sent directly, but they are not
-    advertised so the picker stays clean and tier-oriented.)
-    """
+    """Advertise the virtual + tier model ids the router understands."""
     data = [
         {
             "id": "adaptive",
@@ -49,7 +43,6 @@ def _model_list_payload(models: "RouterModels") -> dict[str, Any]:
                 "object": "model",
                 "created": 0,
                 "owned_by": "model-router",
-                # "tier" metadata lets pickers group by tier without another probe.
                 "tier": tier.value,
                 "model": spec.api_id,
             }
@@ -73,31 +66,18 @@ async def list_models(request: Request):
     return _model_list_payload(settings.models)
 
 
-@router.post("/v1/chat/completions")
-async def chat_completions(request: Request):
-    settings: Settings = request.app.state.settings
-    if not _auth_ok(settings, request):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    try:
-        body: dict[str, Any] = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-
+async def _process_chat(
+    request: Request,
+    body: dict[str, Any],
+    settings: Settings,
+    responses_mode: bool = False,
+) -> StreamingResponse:
+    """Core routing and forwarding logic for all chat-like endpoints."""
     messages = body.get("messages")
     if not isinstance(messages, list) or not messages:
         raise HTTPException(status_code=400, detail="'messages' must be a non-empty list")
 
-    # Classify ONLY the LAST user message — the user's current intent. The
-    # system prompt (Hermes' giant "You are Hermes Agent..." block) and
-    # assistant/tool history are packed with pro/ultra keywords (analyze,
-    # codebase, concurrency, lock, auth, performance, race condition, ...) that
-    # would saturate the classifier. And concatenating ALL user messages from
-    # the conversation means the classifier prompt grows over time, so a long
-    # technical chat saturates the tier to pro/ultra even when the current
-    # request is trivial. Using only the last user message keeps the tier
-    # decision anchored to what the user is asking RIGHT NOW. Fall back to all
-    # messages if there's no user message at all (defensive edge case).
+    # Classify ONLY the LAST user message — the user's current intent.
     last_user_content: str | None = None
     for msg in messages:
         if msg.get("role") != "user":
@@ -113,10 +93,10 @@ async def chat_completions(request: Request):
             ]
             if texts:
                 last_user_content = "\n".join(texts)
+
     if last_user_content is not None:
         prompt = last_user_content
     else:
-        # Defensive: no user message at all — use any text we can find.
         parts: list[str] = []
         for msg in messages:
             content = msg.get("content")
@@ -124,17 +104,14 @@ async def chat_completions(request: Request):
                 parts.append(content)
         prompt = "\n".join(parts)
 
-    # Transparent mode: if the client explicitly requested one of OUR tiers'
-    # api ids (raw upstream id OR a tier name like "mini"/"air"/"pro"/"ultra"),
-    # honor it directly instead of re-classifying.
     requested_model = body.get("model", "")
     known_tier = settings.models.tier_for_api_id(requested_model)
     if known_tier is None:
-        # Tier-name override ("mini", "air", "pro", "ultra") — force that tier.
         try:
             known_tier = Tier(requested_model)
         except ValueError:
             known_tier = None
+
     if known_tier is not None:
         routed_tier = known_tier
     else:
@@ -142,10 +119,8 @@ async def chat_completions(request: Request):
 
     routed_spec = settings.models.tiers[routed_tier]
     routed_model = routed_spec.api_id
-    # Resolve which provider serves this tier (multi-provider support).
     provider = settings.models.provider_for(routed_spec.provider)
 
-    # LOGGING (async-safe, via stdlib logging): terminal + rotating file.
     snippet = prompt[:50].replace("\n", " ") + "..."
     log.info(
         "Tier=%s Model=%s Provider=%s Prompt=%s",
@@ -155,7 +130,6 @@ async def chat_completions(request: Request):
         snippet,
     )
 
-    # Build the upstream body: swap the model id but keep everything else.
     upstream_body = dict(body)
     upstream_body["model"] = routed_model
 
@@ -168,9 +142,6 @@ async def chat_completions(request: Request):
     stream = bool(body.get("stream", False))
     upstream_body["stream"] = stream
 
-    # Shared client lives on app.state (created in lifespan). Fall back to a
-    # one-off client for callers/tests that bypass the lifespan; that one-off
-    # must be closed when the stream finishes (the shared client must NOT be).
     upstream = getattr(request.app.state, "http_client", None)
     own_client = upstream is None
     if own_client:
@@ -191,11 +162,20 @@ async def chat_completions(request: Request):
 
     async def passthrough():
         try:
-            if stream:
-                async for chunk in response.aiter_bytes():
-                    yield chunk
+            if responses_mode:
+                if stream:
+                    async for sse in responses_translate.translate_stream(response, routed_model):
+                        yield sse.encode("utf-8")
+                else:
+                    data = response.json()
+                    obj = responses_translate.translate_non_stream(data, routed_model)
+                    yield json.dumps(obj).encode("utf-8")
             else:
-                yield response.content
+                if stream:
+                    async for chunk in response.aiter_bytes():
+                        yield chunk
+                else:
+                    yield response.content
         finally:
             if own_client:
                 await upstream.aclose()
@@ -211,3 +191,50 @@ async def chat_completions(request: Request):
         media_type=media,
         headers=headers_out,
     )
+
+
+@router.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    settings: Settings = request.app.state.settings
+    if not _auth_ok(settings, request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        body: dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    return await _process_chat(request, body, settings)
+
+
+@router.post("/v1/responses")
+async def responses_shim(request: Request):
+    settings: Settings = request.app.state.settings
+    if not _auth_ok(settings, request):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    try:
+        body: dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    # Translation: /v1/responses -> /v1/chat/completions
+    # Copilot sends 'instructions' (system) and 'input' (list of items).
+    # Older/other clients may send 'messages' directly.
+    instructions = body.get("instructions", "")
+    input_items = body.get("input")
+    messages = body.get("messages")
+
+    chat_messages = []
+    if instructions:
+        chat_messages.append({"role": "system", "content": instructions})
+
+    if isinstance(input_items, list):
+        chat_messages.extend(responses_translate.input_items_to_messages(input_items))
+    elif isinstance(messages, list):
+        chat_messages.extend(messages)
+
+    chat_body = dict(body)
+    chat_body["messages"] = chat_messages
+
+    return await _process_chat(request, chat_body, settings, responses_mode=True)
