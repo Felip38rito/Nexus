@@ -18,6 +18,11 @@ providers:
   default:
     base_url: https://ollama.com/v1
     api_key_env: OLLAMA_API_KEY
+  # Provider local (Ollama rodando na máquina) — usado pelo classificador leve.
+  # O Ollama local ignora o header Authorization, então a chave é irrelevante.
+  local:
+    base_url: http://localhost:11434/v1
+    api_key_env: OLLAMA_API_KEY
   # Exemplo: um segundo provider (descomente para usar).
   # gemini:
   #   base_url: https://generativelanguage.googleapis.com/v1beta

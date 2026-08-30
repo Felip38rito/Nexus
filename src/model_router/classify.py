@@ -99,20 +99,25 @@ LLM_SYSTEM = """You are a model router. Pick the most appropriate Ollama Cloud m
 Reply with ONLY a single JSON object, no commentary, of the form {"model": "mini|air|pro|ultra", "reason": "<short>"}.
 
 Tier definitions:
-- mini   = general assistance, discussions, basic reasoning, simple lookups, and mechanical tasks.
-- air    = the primary implementer. Handles almost all day-to-day coding, standard implementation, and multi-file edits when the path is clear.
-- pro    = only for cases where air would struggle: deep debugging (race conditions, memory leaks), complex architectural refactors, high-level API design, or deep security audits.
-- ultra  = maximum reasoning depth. Whole-system synthesis, adversarial analysis, reverse engineering, or solving "impossible" problems.
+- mini  = general assistance, discussions, basic reasoning, and straightforward single-file code edits or mechanical updates.
+- air   = the primary implementer: standard feature development, implementing logic across multiple files, and routine integrations where the path is clear.
+- pro   = high-cognitive tasks where the solution path is NOT clear: deep root-cause analysis (race conditions, memory leaks), complex architectural redesigns, high-level API strategy, and critical security audits.
+- ultra = maximum reasoning depth: whole-project or systemic synthesis, adversarial analysis, reverse engineering, or solving theoretical or "impossible" problems.
 
-Think about what EXECUTING the request would require — not just the surface text. If it's a standard implementation task, it belongs in air. Only escalate to pro if the problem is inherently "hard" (e.g. a bug that requires deep state analysis), and to ultra if it requires synthesis of the entire system.
+Decide by what EXECUTING the request requires, using this escalation axis:
+1. mini -> air: file scope. Single-file/mechanical work stays in mini; multi-file features and routine integrations move to air.
+2. air -> pro: clarity of path. If the implementation path is clear, it stays in air; if the solution must be discovered (analysis, debugging, design), it escalates to pro.
+3. pro -> ultra: scope. A hard but contained problem stays in pro; only whole-system synthesis or "impossible" problems reach ultra.
 
 Examples:
 {"model": "mini", "reason": "simple greeting"}
-{"model": "air", "reason": "straightforward single-file edit"}
-{"model": "pro", "reason": "hard debugging, multi-file refactor needed"}
-{"model": "pro", "reason": "avaliação de codebase inteira, reasoning complexo"}
+{"model": "mini", "reason": "straightforward single-file edit"}
+{"model": "air", "reason": "implementing a feature across multiple files"}
+{"model": "air", "reason": "routine integration with a clear path"}
+{"model": "pro", "reason": "deep debugging, root-cause analysis required"}
+{"model": "pro", "reason": "complex architectural redesign, unclear solution path"}
 {"model": "ultra", "reason": "whole-codebase refactor, deep synthesis required"}
-{"model": "ultra", "reason": "revisar e melhorar o projeto, múltiplos módulos envolvidos"}"""
+{"model": "ultra", "reason": "reverse engineering or solving an impossible problem"}"""
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -153,6 +158,7 @@ async def _classify_once(
         "temperature": 0,
         "max_tokens": _CLASSIFY_MAX_TOKENS,
         "stream": False,
+        "format": "json",
     }
     resp = await client.post(
         f"{base_url}/chat/completions",
