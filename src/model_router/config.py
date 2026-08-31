@@ -88,11 +88,15 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
             raise ValueError(
                 f"Tier '{tier_key}' references unknown provider '{provider}' in {path}"
             )
+        extra_params = spec.get("extra_params", {})
+        if not isinstance(extra_params, dict):
+            raise ValueError(f"extra_params for tier '{tier_key}' must be a mapping")
         tiers[tier] = ModelSpec(
             api_id=str(spec["model"]),
             description=str(spec.get("description", _DEFAULT_TABLE[tier].description)),
             provider=provider,
             name=str(spec["name"]) if spec.get("name") else None,
+            extra_params=extra_params,
         )
 
     # Require all four tiers.

@@ -219,6 +219,43 @@ def test_load_models_yaml_name_and_default_description(tmp_path: Path):
     assert models.tiers[Tier.AIR].name is None
 
 
+def test_load_models_yaml_extra_params(tmp_path: Path):
+    yaml_path = tmp_path / "models.yaml"
+    yaml_path.write_text(
+        "tiers:\n"
+        "  mini:\n    model: gemma4:31b\n"
+        "  air:\n    model: deepseek-v4-flash:0731\n"
+        "    extra_params:\n"
+        "      reasoning_effort: high\n"
+        "      budget_tokens: 4096\n"
+        "  pro:\n    model: deepseek-v4-pro:0813\n"
+        "  ultra:\n    model: kimi-k3\n"
+    )
+    models = load_models_yaml(yaml_path)
+    assert models is not None
+    # extra_params parsed for the air tier
+    assert models.tiers[Tier.AIR].extra_params == {
+        "reasoning_effort": "high",
+        "budget_tokens": 4096,
+    }
+    # tiers without extra_params default to empty dict
+    assert models.tiers[Tier.MINI].extra_params == {}
+
+
+def test_load_models_yaml_extra_params_must_be_mapping(tmp_path: Path):
+    yaml_path = tmp_path / "models.yaml"
+    yaml_path.write_text(
+        "tiers:\n"
+        "  mini:\n    model: gemma4:31b\n"
+        "  air:\n    model: deepseek-v4-flash:0731\n"
+        "    extra_params: not-a-mapping\n"
+        "  pro:\n    model: deepseek-v4-pro:0813\n"
+        "  ultra:\n    model: kimi-k3\n"
+    )
+    with pytest.raises(ValueError, match="extra_params for tier 'air' must be a mapping"):
+        load_models_yaml(yaml_path)
+
+
 def test_modelspec_name_defaults_to_none():
     from model_router.models import ModelSpec
     spec = ModelSpec(api_id="gemma4:31b", description="x")
