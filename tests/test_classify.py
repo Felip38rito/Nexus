@@ -79,7 +79,11 @@ async def test_llm_tier_maps_json():
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(fake_handler))
-    tier = await llm_tier("some long prompt", api_key="k", client=client)
+    from model_router.models import RouterModels, ModelSpec, Tier
+    models = RouterModels(
+        tiers={t: ModelSpec("id", "desc") for t in Tier}
+    )
+    tier = await llm_tier("some long prompt", models, api_key="k", client=client)
     await client.aclose()
     assert tier == Tier.PRO
 
@@ -97,7 +101,11 @@ async def test_llm_tier_handles_prose_around_json():
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    tier = await llm_tier("some prompt", api_key="k", client=client)
+    from model_router.models import RouterModels, ModelSpec, Tier
+    models = RouterModels(
+        tiers={t: ModelSpec("id", "desc") for t in Tier}
+    )
+    tier = await llm_tier("some prompt", models, api_key="k", client=client)
     await client.aclose()
     assert tier == Tier.AIR
 
@@ -108,7 +116,11 @@ async def test_llm_tier_fails_safe_to_none():
         return httpx.Response(500, text="boom", request=request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    tier = await llm_tier("some prompt", api_key="k", client=client)
+    from model_router.models import RouterModels, ModelSpec, Tier
+    models = RouterModels(
+        tiers={t: ModelSpec("id", "desc") for t in Tier}
+    )
+    tier = await llm_tier("some prompt", models, api_key="k", client=client)
     await client.aclose()
     assert tier is None
 
@@ -129,7 +141,11 @@ async def test_llm_tier_retries_on_500_then_succeeds():
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    tier = await llm_tier("some prompt", api_key="k", client=client)
+    from model_router.models import RouterModels, ModelSpec, Tier
+    models = RouterModels(
+        tiers={t: ModelSpec("id", "desc") for t in Tier}
+    )
+    tier = await llm_tier("some prompt", models, api_key="k", client=client)
     await client.aclose()
     assert tier == Tier.PRO
     assert calls["n"] == 2  # exactly one retry
@@ -142,7 +158,11 @@ async def test_llm_tier_empty_body_returns_none():
         return httpx.Response(200, text="", request=request)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    tier = await llm_tier("some prompt", api_key="k", client=client)
+    from model_router.models import RouterModels, ModelSpec, Tier
+    models = RouterModels(
+        tiers={t: ModelSpec("id", "desc") for t in Tier}
+    )
+    tier = await llm_tier("some prompt", models, api_key="k", client=client)
     await client.aclose()
     assert tier is None
 
@@ -159,7 +179,11 @@ async def test_llm_tier_non_json_content_type_returns_none():
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    tier = await llm_tier("some prompt", api_key="k", client=client)
+    from model_router.models import RouterModels, ModelSpec, Tier
+    models = RouterModels(
+        tiers={t: ModelSpec("id", "desc") for t in Tier}
+    )
+    tier = await llm_tier("some prompt", models, api_key="k", client=client)
     await client.aclose()
     assert tier is None
 
@@ -175,7 +199,11 @@ async def test_llm_tier_empty_content_returns_none():
         )
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    tier = await llm_tier("some prompt", api_key="k", client=client)
+    from model_router.models import RouterModels, ModelSpec, Tier
+    models = RouterModels(
+        tiers={t: ModelSpec("id", "desc") for t in Tier}
+    )
+    tier = await llm_tier("some prompt", models, api_key="k", client=client)
     await client.aclose()
     assert tier is None
 
@@ -189,3 +217,23 @@ def test_extract_json_object_handles_braces_in_string():
     assert obj is not None
     assert obj["model"] == "air"
     assert obj["reason"] == "brace } inside"
+
+
+def test_build_llm_system_injects_custom_description():
+    from model_router.classify import build_llm_system
+    from model_router.models import RouterModels, ModelSpec, Tier
+
+    models = RouterModels(
+        tiers={
+            Tier.MINI: ModelSpec("gemma4:31b", "custom mini desc"),
+            Tier.AIR: ModelSpec("deepseek-v4-flash:0731", "custom air desc"),
+            Tier.PRO: ModelSpec("deepseek-v4-pro:0813", "custom pro desc"),
+            Tier.ULTRA: ModelSpec("kimi-k3", "custom ultra desc"),
+        }
+    )
+    prompt = build_llm_system(models)
+    assert "custom mini desc" in prompt
+    assert "custom ultra desc" in prompt
+    # The output format contract is preserved.
+    assert '"model"' in prompt
+    assert "mini" in prompt and "ultra" in prompt
