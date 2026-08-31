@@ -217,3 +217,75 @@ def test_load_models_yaml_name_and_default_description(tmp_path: Path):
     # air omitted description -> falls back to built-in default (non-empty)
     assert models.tiers[Tier.AIR].description  # truthy
     assert models.tiers[Tier.AIR].name is None
+
+
+def test_modelspec_name_defaults_to_none():
+    from model_router.models import ModelSpec
+    spec = ModelSpec(api_id="gemma4:31b", description="x")
+    assert spec.name is None
+
+def test_from_env_prefers_user_config_over_repo(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("ROUTER_MODELS_YAML", raising=False)
+    
+    # Setup user config dir and file
+    user_config_dir = tmp_path / ".config" / "axon"
+    user_config_dir.mkdir(parents=True)
+    user_cfg = user_config_dir / "config.yml"
+    user_cfg.write_text(
+        "tiers:\n"
+        "  mini:\n    model: user-mini\n"
+        "  air:\n    model: user-air\n"
+        "  pro:\n    model: user-pro\n"
+        "  ultra:\n    model: user-ultra\n"
+    )
+    
+    # Mock Path.home to return the tmp_path
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    
+    # Repo default exists but must NOT win.
+    repo_yaml = tmp_path / "router.models.yaml"
+    repo_yaml.write_text(
+        "tiers:\n"
+        "  mini:\n    model: repo-mini\n"
+        "  air:\n    model: repo-air\n"
+        "  pro:\n    model: repo-pro\n"
+        "  ultra:\n    model: repo-ultra\n"
+    )
+    
+    s = Settings.from_env(tmp_path / ".env", default_models_yaml=repo_yaml)
+    assert s.models.tiers[Tier.MINI].api_id == "user-mini"
+
+def test_from_env_prefers_user_config_over_repo(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("ROUTER_MODELS_YAML", raising=False)
+    
+    # Setup user config dir and file
+    user_config_dir = tmp_path / ".config" / "axon"
+    user_config_dir.mkdir(parents=True)
+    user_cfg = user_config_dir / "config.yml"
+    user_cfg.write_text(
+        "tiers:\n"
+        "  mini:\n    model: user-mini\n"
+        "  air:\n    model: user-air\n"
+        "  pro:\n    model: user-pro\n"
+        "  ultra:\n    model: user-ultra\n"
+    )
+    
+    # Mock Path.home to return the tmp_path
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    
+    # Repo default exists but must NOT win.
+    repo_yaml = tmp_path / "router.models.yaml"
+    repo_yaml.write_text(
+        "tiers:\n"
+        "  mini:\n    model: repo-mini\n"
+        "  air:\n    model: repo-air\n"
+        "  pro:\n    model: repo-pro\n"
+        "  ultra:\n    model: repo-ultra\n"
+    )
+    
+    s = Settings.from_env(tmp_path / ".env", default_models_yaml=repo_yaml)
+    assert s.models.tiers[Tier.MINI].api_id == "user-mini"

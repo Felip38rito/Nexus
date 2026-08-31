@@ -31,10 +31,11 @@ class ProviderSpec:
     api_key: str | None = None
     api_key_env: str | None = "OLLAMA_API_KEY"
 
-    def resolve_api_key(self) -> str:
-        """Resolve the API key from inline value or environment variable.
+    def resolve_api_key(self, fallback: str | None = None) -> str:
+        """Resolve the API key from inline value, environment variable, or a provided fallback.
         
-        Raises RuntimeError if neither is provided or if both are set (ambiguity).
+        Raises RuntimeError if both inline and env var are set (ambiguity), 
+        or if no key is found at all.
         """
         import os
         inline = self.api_key
@@ -44,12 +45,10 @@ class ProviderSpec:
         if inline and env_val:
             raise RuntimeError(f"Ambiguous API key for provider: both inline and env var '{env_var}' are set.")
         
-        if env_val:
-            return env_val
-        if inline:
-            return inline
-            
-        raise RuntimeError(f"No API key found for provider: inline is empty and env var '{env_var}' is not set.")
+        res = env_val or inline or fallback
+        if res is None:
+            raise RuntimeError(f"No API key found for provider: inline is empty, env var '{env_var}' is not set, and no fallback provided.")
+        return res
 
 
 @dataclass(frozen=True)
@@ -98,9 +97,10 @@ class RouterModels:
     # Named upstream endpoints. Each tier's ModelSpec.provider keys into this.
     providers: dict[str, ProviderSpec] = field(default_factory=lambda: dict(DEFAULT_PROVIDERS))
 
-    def tier_for_api_id(self, api_id: str) -> Tier | None:
+    def tier_for_alias(self, alias: str) -> Tier | None:
+        """Resolve a model id or display name to a tier."""
         for tier, spec in self.tiers.items():
-            if spec.api_id == api_id:
+            if spec.api_id == alias or (spec.name and spec.name == alias):
                 return tier
         return None
 
@@ -119,4 +119,4 @@ MODEL_TABLE: dict[Tier, ModelSpec] = dict(_DEFAULT_TABLE)
 
 
 def tier_for_api_id(api_id: str) -> Tier | None:
-    return RouterModels().tier_for_api_id(api_id)
+    return RouterModels().tier_for_alias(api_id)

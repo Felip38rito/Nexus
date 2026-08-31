@@ -39,7 +39,7 @@ def _model_list_payload(models: "RouterModels") -> dict[str, Any]:
         spec = models.tiers[tier]
         data.append(
             {
-                "id": tier.value,
+                "id": spec.name or tier.value,
                 "object": "model",
                 "created": 0,
                 "owned_by": "axon",
@@ -105,7 +105,7 @@ async def _process_chat(
         prompt = "\n".join(parts)
 
     requested_model = body.get("model", "")
-    known_tier = settings.models.tier_for_api_id(requested_model)
+    known_tier = settings.models.tier_for_alias(requested_model)
     if known_tier is None:
         try:
             known_tier = Tier(requested_model)
@@ -135,7 +135,7 @@ async def _process_chat(
 
     target_url = f"{provider.base_url}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {provider.resolve_api_key()}",
+        "Authorization": f"Bearer {provider.resolve_api_key(fallback=settings.ollama_api_key)}",
         "Content-Type": "application/json",
     }
 

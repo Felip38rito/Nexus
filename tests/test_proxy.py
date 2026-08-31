@@ -368,3 +368,24 @@ def test_multi_provider_routes_to_correct_endpoint(tmp_path, monkeypatch):
     # The request must go to the gemini provider's endpoint, not ollama.
     assert seen["url"] == "https://generativelanguage.googleapis.com/v1beta/chat/completions"
     assert r.headers["X-Router-Tier"] == "pro"
+
+def test_models_payload_uses_custom_name():
+    from model_router.models import RouterModels, ModelSpec, Tier
+    from model_router.proxy import _model_list_payload
+
+    models = RouterModels(
+        tiers={
+            Tier.MINI: ModelSpec("gemma4:31b", "d", name="Fast"),
+            Tier.AIR: ModelSpec("deepseek-v4-flash:0731", "d"),
+            Tier.PRO: ModelSpec("deepseek-v4-pro:0813", "d"),
+            Tier.ULTRA: ModelSpec("kimi-k3", "d"),
+        }
+    )
+    payload = _model_list_payload(models)
+    ids = [m["id"] for m in payload["data"]]
+    assert "Fast" in ids          # custom name advertised
+    assert "mini" not in ids      # key replaced by name
+    assert "air" in ids           # no name -> key used
+    # internal tier key preserved
+    fast = next(m for m in payload["data"] if m["id"] == "Fast")
+    assert fast["tier"] == "mini"

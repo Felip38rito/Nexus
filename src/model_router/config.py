@@ -153,13 +153,19 @@ class Settings:
         key = os.environ.get("OLLAMA_API_KEY", "").strip()
         require_auth = os.environ.get("ROUTER_API_KEY", "").strip()
 
-        # Load models YAML: explicit ROUTER_MODELS_YAML wins, else the default
-        # project file, else built-in defaults.
+        # Load models YAML: explicit ROUTER_MODELS_YAML wins, else the
+        # user config in ~/.config/axon/config.yml, else the project
+        # default file, else built-in defaults.
         yaml_path_raw = os.environ.get("ROUTER_MODELS_YAML", "").strip()
         if yaml_path_raw:
             yaml_path: Path | None = Path(yaml_path_raw)
         else:
-            yaml_path = default_models_yaml
+            user_cfg = Path.home() / ".config" / "axon" / "config.yml"
+            if user_cfg.exists():
+                yaml_path = user_cfg
+            else:
+                yaml_path = default_models_yaml
+        
         models = load_models_yaml(yaml_path) or RouterModels()
 
         return cls(

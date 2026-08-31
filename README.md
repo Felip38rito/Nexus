@@ -103,8 +103,11 @@ uv run pytest
 
 ## Model configuration (YAML)
 
-The 4 tiers are fixed; the models, their providers, and the classifier are all
-configured in `router.models.yaml` (or another file via `ROUTER_MODELS_YAML`).
+Each tier accepts two optional fields:
+- `name`: a display/route alias shown in `/v1/models` (e.g. `Fast`). If unset, the tier key is used. The classifier always uses the internal key.
+- `description`: overrides the classifier's system prompt for that tier. If unset, the built-in description is used.
+
+Config is resolved from (first match): `ROUTER_MODELS_YAML` env var, `~/.config/axon/config.yml`, `router.models.yaml` in the repo, then built-in defaults.
 
 ```yaml
 default_tier: air
