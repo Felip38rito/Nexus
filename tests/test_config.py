@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from model_router.config import Settings, load_models_yaml
-from model_router.models import MODEL_TABLE, Tier, tier_for_api_id
+from model_router.models import MODEL_TABLE, Tier, tier_for_api_id, ModelSpec
 
 
 def test_tier_table_has_all_tiers():
@@ -193,3 +193,9 @@ def test_load_models_yaml_provider_requires_base_url(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="must define a 'base_url'"):
         load_models_yaml(yaml_path)
+
+
+def test_modelspec_name_defaults_to_none():
+    from model_router.models import ModelSpec
+    spec = ModelSpec(api_id="gemma4:31b", description="x")
+    assert spec.name is None

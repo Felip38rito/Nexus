@@ -59,6 +59,11 @@ class ModelSpec:
     # Which named provider (see Settings.providers) serves this tier. Defaults
     # to "default" so existing single-provider configs keep working unchanged.
     provider: str = "default"
+    # Optional display/route alias. If set, /v1/models advertises this as the
+    # model id and the proxy accepts it as an alias for the tier. If None, the
+    # tier key (mini/air/pro/ultra) is used. Never affects the classifier's
+    # internal key.
+    name: str | None = None
 
 
 # The built-in single-provider table. `air` is the default for day-to-day work.
