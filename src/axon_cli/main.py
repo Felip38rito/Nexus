@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from . import __version__
+from .config_cmd import list_config, set_tier_model
 from .setup import run_setup
 
 app = typer.Typer(
@@ -67,6 +68,31 @@ def version() -> None:
 def setup() -> None:
     """Run the interactive setup to configure the router."""
     run_setup()
+
+
+@app.command()
+def config(
+    action: str = typer.Argument(..., help="'list' or 'set'"),
+    tier: str = typer.Argument(None, help="Tier key (for 'set')"),
+    model: str = typer.Option(None, "--model", "-m", help="Model id (for 'set')"),
+) -> None:
+    """View or modify the router config."""
+    if action == "list":
+        list_config()
+    elif action == "set":
+        if not tier or not model:
+            console.print(
+                "[red]Usage: axon config set <tier> --model <id>[/red]",
+                file=sys.stderr,
+            )
+            raise typer.Exit(code=1)
+        set_tier_model(tier, model)
+    else:
+        console.print(
+            f"[red]Unknown config action '{action}'.[/red] Use 'list' or 'set'.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command()
