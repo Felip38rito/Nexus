@@ -64,7 +64,7 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
                 raise ValueError(f"Provider '{name}' must define a 'base_url'")
             providers[str(name)] = ProviderSpec(
                 base_url=str(pcfg["base_url"]).rstrip("/"),
-                api_key=str(pcfg.get("api_key")),
+                api_key=str(pcfg["api_key"]) if pcfg.get("api_key") else None,
                 api_key_env=str(pcfg.get("api_key_env", "OLLAMA_API_KEY")) if "api_key_env" in pcfg else None,
             )
         # Always ensure a "default" provider exists so tiers that don't specify

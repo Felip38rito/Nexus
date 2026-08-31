@@ -83,6 +83,61 @@ Tests:
 uv run pytest
 ```
 
+## Using the Axon CLI
+
+`axon` is a modern CLI for managing the router: guided setup, service
+lifecycle, and config management. It wraps `axonctl.sh` for service commands.
+
+```bash
+export PATH="$PATH:$PWD"    # make the `axon` script available
+```
+
+### Guided setup
+
+The first step is usually `axon setup`, which walks you through configuring
+providers, tiers, and reasoning levels interactively:
+
+```bash
+axon setup
+```
+
+It asks for:
+
+1. **Provider** — name, `base_url`, and the env var holding the API key.
+2. **Tiers** — either *Axon Omakase* (recommended defaults) or custom display
+   names, plus the model id for each tier (`mini`/`air`/`pro`/`ultra`).
+3. **Reasoning levels** — optionally attach `extra_params` (e.g.
+   `reasoning_effort: high`) to specific tiers.
+
+The result is written to `~/.config/axon/config.yml`, which the router reads
+automatically.
+
+### Service lifecycle
+
+```bash
+axon start      # start the router service
+axon stop       # stop it
+axon restart    # restart it
+axon status     # is it running?
+axon logs       # last 100 lines of logs
+axon tail       # follow logs live
+```
+
+### Config management
+
+```bash
+axon config list                 # show tier -> name -> model -> provider
+axon config set pro --model <id> # change a tier's model id
+```
+
+### Example
+
+```bash
+axon setup                       # configure providers + tiers
+axon start                       # launch the router
+curl localhost:9000/v1/models    # custom names appear here
+```
+
 ## Environment configuration
 
 | Var | Default | Description |
@@ -106,6 +161,7 @@ uv run pytest
 Each tier accepts two optional fields:
 - `name`: a display/route alias shown in `/v1/models` (e.g. `Fast`). If unset, the tier key is used. The classifier always uses the internal key.
 - `description`: overrides the classifier's system prompt for that tier. If unset, the built-in description is used.
+- `extra_params`: a mapping of provider-specific parameters (e.g. `reasoning_effort`, `budget_tokens`) merged into the upstream request body for that tier.
 
 Config is resolved from (first match): `ROUTER_MODELS_YAML` env var, `~/.config/axon/config.yml`, `router.models.yaml` in the repo, then built-in defaults.
 
@@ -134,6 +190,8 @@ tiers:
     model: deepseek-v4-pro:0813
     description: "raw coding power"
     # provider: gemini        # optional — defaults to "default"
+    # extra_params:           # optional — merged into the upstream request
+    #   reasoning_effort: high
   ultra:
     model: kimi-k3
     description: "deep synthesis, whole-architecture"
