@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Nexus → OpenCode model sync.
+"""Axon → OpenCode model sync.
 
-Reads the model tiers advertised by the Nexus router (`GET /v1/models`) and
+Reads the model tiers advertised by the Axon router (`GET /v1/models`) and
 writes them into the `models` block of the `router` provider inside an
 `opencode.json(c)` config.
 
@@ -351,9 +351,9 @@ def sync_config(text: str, models: list[dict], dry_run: bool = False) -> tuple[s
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync Nexus router tiers into OpenCode config.")
+    parser = argparse.ArgumentParser(description="Sync Axon router tiers into OpenCode config.")
     parser.add_argument("--config", default=str(DEFAULT_CONFIG), help="Path to opencode.json(c)")
-    parser.add_argument("--router-url", default=DEFAULT_ROUTER_URL, help="Nexus router base URL (default: %(default)s)")
+    parser.add_argument("--router-url", default=DEFAULT_ROUTER_URL, help="Axon router base URL (default: %(default)s)")
     parser.add_argument("--dry-run", action="store_true", help="Print what would change without writing.")
     args = parser.parse_args()
 
@@ -363,7 +363,7 @@ def main() -> int:
         models = fetch_models(args.router_url)
     except Exception as exc:  # noqa: BLE001
         print(f"✗ Could not fetch models from {args.router_url}: {exc}")
-        print("  Is the Nexus router running? (nexusctl status)")
+        print("  Is the Axon router running? (axonctl status)")
         return 1
 
     if not config_path.exists():

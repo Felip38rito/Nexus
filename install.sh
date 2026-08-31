@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh - Bootstrap installer for Nexus model router
+# install.sh - Bootstrap installer for Axon model router
 # Works even without uv pre-installed. Installs uv, syncs deps, sets up .env,
 # adds repo to PATH, installs background service, and validates.
 
@@ -148,18 +148,18 @@ add_to_path() {
     fi
 }
 
-# Install background service via nexusctl
+# Install background service via axonctl
 install_service() {
     if $NO_SERVICE; then
         log "Skipping service installation (--no-service)."
         return
     fi
-    log "Installing background service via nexusctl..."
+    log "Installing background service via axonctl..."
     if $DRY_RUN; then
-        log "[DRY RUN] Would run: $REPO_DIR/nexusctl install --port $PORT"
+        log "[DRY RUN] Would run: $REPO_DIR/axonctl install --port $PORT"
         return
     fi
-    (cd "$REPO_DIR" && ./nexusctl install --port "$PORT")
+    (cd "$REPO_DIR" && ./axonctl install --port "$PORT")
     log "Service installed."
 }
 
@@ -191,9 +191,9 @@ print_summary() {
     echo
     echo "=================================================="
     if $DRY_RUN; then
-        echo " Nexus installation (DRY RUN — nothing was changed)"
+        echo " Axon installation (DRY RUN — nothing was changed)"
     else
-        echo " Nexus installation complete"
+        echo " Axon installation complete"
     fi
     echo "=================================================="
     echo " Repository: $REPO_DIR"
@@ -201,13 +201,13 @@ print_summary() {
     echo " Service: $([ $NO_SERVICE = true ] && echo 'not installed' || echo 'installed')"
     echo
     echo " Usage:"
-    echo "   nexusctl status   - Check service status"
-    echo "   nexusctl restart  - Restart service"
-    echo "   nexusctl logs     - View logs"
-    echo "   nexusctl tail     - Follow logs"
+    echo "   axonctl status   - Check service status"
+    echo "   axonctl restart  - Restart service"
+    echo "   axonctl logs     - View logs"
+    echo "   axonctl tail     - Follow logs"
     echo
     echo " To uninstall:"
-    echo "   nexusctl uninstall"
+    echo "   axonctl uninstall"
     echo "   (and remove the PATH line from your shell config)"
     echo "=================================================="
 }
@@ -217,7 +217,7 @@ main() {
     parse_args "$@"
     cd "$REPO_DIR"
 
-    log "Starting Nexus installation..."
+    log "Starting Axon installation..."
     ensure_uv
     sync_deps
     setup_env

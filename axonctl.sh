@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# nexusctl — manage the Nexus Model Router as a background service.
+# axonctl — manage the Axon Model Router as a background service.
 #
 # Supports macOS (launchd) and Linux (systemd).
 # Self-locating: derives the repo path from its own location.
 #
-#   export PATH="$PATH:/path/to/nexus-repo"
-#   nexusctl install    # generate + load the service
-#   nexusctl status
-#   nexusctl restart
+#   export PATH="$PATH:/path/to/axon-repo"
+#   axonctl install    # generate + load the service
+#   axonctl status
+#   axonctl restart
 #
-# The service label defaults to "nexus"; override with NEXUS_LABEL.
+# The service label defaults to "axon"; override with AXON_LABEL.
 
 set -euo pipefail
 
@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
 
 # --- Config ----------------------------------------------------------------
-LABEL="${NEXUS_LABEL:-nexus}"
+LABEL="${AXON_LABEL:-axon}"
 DOMAIN="gui/$(id -u)"
 RUN_SH="$REPO_DIR/run.sh"
 PORT="${ROUTER_PORT:-9000}"
@@ -42,7 +42,7 @@ LOG_ERR="$REPO_DIR/logs/router.err.log"
 
 usage() {
     cat <<EOF
-Usage: nexusctl [--port N] [--label NAME] <command>
+Usage: axonctl [--port N] [--label NAME] <command>
 
 Commands:
   install     Generate the service config and load it
@@ -56,9 +56,9 @@ Commands:
 
 Flags:
   --port N     Override the router port (default: 9000)
-  --label NAME Override the service label (default: nexus)
+  --label NAME Override the service label (default: axon)
 
-The service label defaults to "nexus". Override with NEXUS_LABEL.
+The service label defaults to "axon". Override with AXON_LABEL.
 EOF
     exit 1
 }
@@ -124,26 +124,26 @@ _mac_uninstall() {
 
 _mac_start() {
     if launchctl list "$LABEL" &>/dev/null; then
-        echo "ℹ️  Nexus already running."
+        echo "ℹ️  Axon already running."
     else
-        echo "🚀 Starting Nexus (launchd)..."
+        echo "🚀 Starting Axon (launchd)..."
         launchctl bootstrap "$DOMAIN" "$PLIST"
     fi
 }
 
 _mac_stop() {
     if launchctl list "$LABEL" &>/dev/null; then
-        echo "🛑 Stopping Nexus..."
+        echo "🛑 Stopping Axon..."
         launchctl bootout "$DOMAIN/$LABEL" || true
     fi
 }
 
 _mac_status() {
     if launchctl list "$LABEL" &>/dev/null; then
-        echo "🔍 Nexus is running (label $LABEL):"
+        echo "🔍 Axon is running (label $LABEL):"
         launchctl list "$LABEL"
     else
-        echo "🔍 Nexus is NOT running."
+        echo "🔍 Axon is NOT running."
     fi
 }
 
@@ -152,7 +152,7 @@ _lin_install() {
     mkdir -p "$HOME/.config/systemd/user" "$REPO_DIR/logs"
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=Nexus Model Router
+Description=Axon Model Router
 After=network.target
 
 [Service]
@@ -181,21 +181,21 @@ _lin_uninstall() {
 }
 
 _lin_start() {
-    echo "🚀 Starting Nexus (systemd)..."
+    echo "🚀 Starting Axon (systemd)..."
     systemctl --user start "$LABEL.service"
 }
 
 _lin_stop() {
-    echo "🛑 Stopping Nexus..."
+    echo "🛑 Stopping Axon..."
     systemctl --user stop "$LABEL.service"
 }
 
 _lin_status() {
     if systemctl --user is-active --quiet "$LABEL.service"; then
-        echo "🔍 Nexus is running (label $LABEL):"
+        echo "🔍 Axon is running (label $LABEL):"
         systemctl --user status "$LABEL.service"
     else
-        echo "🔍 Nexus is NOT running."
+        echo "🔍 Axon is NOT running."
     fi
 }
 

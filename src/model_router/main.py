@@ -49,7 +49,7 @@ def _setup_logging(project_root: Path) -> None:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
-        title="Nexus",
+        title="Axon",
         version=__version__,
         description="Local OpenAI-compatible proxy routing requests to the cheapest adequate Ollama Cloud model.",
         lifespan=_lifespan,

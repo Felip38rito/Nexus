@@ -1,4 +1,4 @@
-# Makefile for Nexus model router
+# Makefile for Axon model router
 # Provides common development and management commands.
 
 .PHONY: install test restart status logs clean setup-dev
@@ -10,13 +10,13 @@ test:
 	uv run pytest
 
 restart:
-	./nexusctl restart
+	./axonctl restart
 
 status:
-	./nexusctl status
+	./axonctl status
 
 logs:
-	./nexusctl logs
+	./axonctl logs
 
 clean:
 	rm -f logs/*.log
