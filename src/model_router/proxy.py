@@ -135,7 +135,7 @@ async def _process_chat(
 
     target_url = f"{provider.base_url}/chat/completions"
     headers = {
-        "Authorization": f"Bearer {os.environ.get(provider.api_key_env, '')}",
+        "Authorization": f"Bearer {provider.resolve_api_key()}",
         "Content-Type": "application/json",
     }
 

@@ -23,11 +23,33 @@ class ProviderSpec:
     """A named upstream endpoint a tier (or the classifier) can point at.
 
     ``base_url`` is the provider's OpenAI-compatible ``/v1`` endpoint.
+    ``api_key`` is the key provided inline.
     ``api_key_env`` is the environment variable holding that provider's key.
     """
 
     base_url: str
-    api_key_env: str = "OLLAMA_API_KEY"
+    api_key: str | None = None
+    api_key_env: str | None = "OLLAMA_API_KEY"
+
+    def resolve_api_key(self) -> str:
+        """Resolve the API key from inline value or environment variable.
+        
+        Raises RuntimeError if neither is provided or if both are set (ambiguity).
+        """
+        import os
+        inline = self.api_key
+        env_var = self.api_key_env
+        env_val = os.environ.get(env_var) if env_var else None
+
+        if inline and env_val:
+            raise RuntimeError(f"Ambiguous API key for provider: both inline and env var '{env_var}' are set.")
+        
+        if env_val:
+            return env_val
+        if inline:
+            return inline
+            
+        raise RuntimeError(f"No API key found for provider: inline is empty and env var '{env_var}' is not set.")
 
 
 @dataclass(frozen=True)

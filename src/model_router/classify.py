@@ -303,7 +303,7 @@ async def classify(
     classifier_provider = settings.models.provider_for(settings.models.classifier_provider)
     llm = await llm_tier(
         prompt,
-        api_key=os.environ.get(classifier_provider.api_key_env, ""),
+        api_key=classifier_provider.resolve_api_key(),
         base_url=classifier_provider.base_url,
         classifier_model=settings.models.classifier_model,
         client=client,
