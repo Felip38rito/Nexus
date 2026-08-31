@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from . import __version__
+from .setup import run_setup
 
 app = typer.Typer(
     name="axon",
@@ -60,6 +61,12 @@ def _run_axonctl(*args: str) -> None:
 def version() -> None:
     """Print the CLI version."""
     console.print(f"axon {__version__}")
+
+
+@app.command()
+def setup() -> None:
+    """Run the interactive setup to configure the router."""
+    run_setup()
 
 
 @app.command()
