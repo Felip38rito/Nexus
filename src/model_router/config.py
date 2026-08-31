@@ -16,6 +16,7 @@ from .models import (
     ProviderSpec,
     RouterModels,
     Tier,
+    _DEFAULT_TABLE,
 )
 
 
@@ -89,8 +90,9 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
             )
         tiers[tier] = ModelSpec(
             api_id=str(spec["model"]),
-            description=str(spec.get("description", "")),
+            description=str(spec.get("description", _DEFAULT_TABLE[tier].description)),
             provider=provider,
+            name=str(spec["name"]) if spec.get("name") else None,
         )
 
     # Require all four tiers.

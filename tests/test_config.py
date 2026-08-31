@@ -199,3 +199,21 @@ def test_modelspec_name_defaults_to_none():
     from model_router.models import ModelSpec
     spec = ModelSpec(api_id="gemma4:31b", description="x")
     assert spec.name is None
+
+
+def test_load_models_yaml_name_and_default_description(tmp_path: Path):
+    yaml_path = tmp_path / "models.yaml"
+    yaml_path.write_text(
+        "tiers:\n"
+        "  mini:\n    model: gemma4:31b\n    name: Fast\n"
+        "  air:\n    model: deepseek-v4-flash:0731\n"
+        "  pro:\n    model: deepseek-v4-pro:0813\n"
+        "  ultra:\n    model: kimi-k3\n"
+    )
+    models = load_models_yaml(yaml_path)
+    assert models is not None
+    # name parsed
+    assert models.tiers[Tier.MINI].name == "Fast"
+    # air omitted description -> falls back to built-in default (non-empty)
+    assert models.tiers[Tier.AIR].description  # truthy
+    assert models.tiers[Tier.AIR].name is None
