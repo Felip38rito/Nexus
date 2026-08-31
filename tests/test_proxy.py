@@ -389,3 +389,50 @@ def test_models_payload_uses_custom_name():
     # internal tier key preserved
     fast = next(m for m in payload["data"] if m["id"] == "Fast")
     assert fast["tier"] == "mini"
+
+
+def test_extra_params_merged_into_upstream_body(client: TestClient, monkeypatch):
+    """A tier with extra_params must have those params present in the upstream body."""
+    from model_router.models import RouterModels, ModelSpec, Tier
+
+    models = RouterModels(
+        tiers={
+            Tier.MINI: ModelSpec("gemma4:31b", "d"),
+            Tier.AIR: ModelSpec(
+                "deepseek-v4-flash:0731",
+                "d",
+                extra_params={"reasoning_effort": "high", "budget_tokens": 4096},
+            ),
+            Tier.PRO: ModelSpec("deepseek-v4-pro:0813", "d"),
+            Tier.ULTRA: ModelSpec("kimi-k3", "d"),
+        }
+    )
+    settings = Settings(
+        ollama_api_key="upstream-key",
+        ollama_base_url="https://ollama.com/v1",
+        models=models,
+    )
+    client = TestClient(_make_app(settings))
+
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        seen["body"] = kw["json"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    # Force the air tier (which carries extra_params) via a tier-name override.
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "air", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 200
+    assert seen["body"]["model"] == "deepseek-v4-flash:0731"
+    # extra_params merged into the upstream request body
+    assert seen["body"]["reasoning_effort"] == "high"
+    assert seen["body"]["budget_tokens"] == 4096

@@ -131,6 +131,7 @@ async def _process_chat(
     )
 
     upstream_body = dict(body)
+    upstream_body.update(routed_spec.extra_params)  # Merge reasoning/sampling params
     upstream_body["model"] = routed_model
 
     target_url = f"{provider.base_url}/chat/completions"

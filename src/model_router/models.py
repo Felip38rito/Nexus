@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 
 class Tier(str, Enum):
@@ -63,6 +64,9 @@ class ModelSpec:
     # tier key (mini/air/pro/ultra) is used. Never affects the classifier's
     # internal key.
     name: str | None = None
+    # Arbitrary provider-specific parameters (e.g. reasoning_effort,
+    # budget_tokens) merged into the upstream request body for this tier.
+    extra_params: dict[str, Any] = field(default_factory=dict)
 
 
 # The built-in single-provider table. `air` is the default for day-to-day work.
