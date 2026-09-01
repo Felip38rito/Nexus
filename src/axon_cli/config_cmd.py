@@ -15,25 +15,26 @@ from rich.table import Table
 from .setup import config_path
 
 console = Console()
+# Console that writes to stderr, for error messages.
+err_console = Console(stderr=True)
 
 
 def _load_config(path: Path | None = None) -> dict[str, Any]:
     """Load the user config, raising a helpful error if missing/invalid."""
     path = path or config_path()
     if not path.exists():
-        console.print(
+        err_console.print(
             f"[red]No config found at {path}.[/red]\n"
             "Run [bold]axon setup[/bold] to create one.",
-            file=__import__("sys").stderr,
         )
         raise typer.Exit(code=1)
     try:
         data = yaml.safe_load(path.read_text())
     except yaml.YAMLError as exc:
-        console.print(f"[red]Invalid YAML in {path}:[/red] {exc}", file=__import__("sys").stderr)
+        err_console.print(f"[red]Invalid YAML in {path}:[/red] {exc}")
         raise typer.Exit(code=1)
     if not isinstance(data, dict):
-        console.print(f"[red]Config at {path} is not a mapping.[/red]", file=__import__("sys").stderr)
+        err_console.print(f"[red]Config at {path} is not a mapping.[/red]")
         raise typer.Exit(code=1)
     return data
 
@@ -81,9 +82,8 @@ def set_tier_model(tier: str, model: str) -> None:
     data = _load_config()
     tiers = data.get("tiers") or {}
     if tier not in tiers:
-        console.print(
+        err_console.print(
             f"[red]Unknown tier '{tier}'.[/red] Valid tiers: {', '.join(tiers.keys())}",
-            file=__import__("sys").stderr,
         )
         raise typer.Exit(code=1)
     tiers[tier]["model"] = model

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import typer
@@ -22,6 +21,8 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+# Console that writes to stderr, for error messages.
+err_console = Console(stderr=True)
 
 # Repo root: src/axon_cli/main.py -> src -> repo root.
 # Prefer stable home (~/.axon), fallback to local repo structure.
@@ -37,10 +38,9 @@ def _find_axonctl() -> Path:
     found = shutil.which("axonctl")
     if found:
         return Path(found)
-    console.print(
+    err_console.print(
         "[red]axonctl.sh not found.[/red] "
         f"Expected at {AXONCTL} or on PATH.",
-        file=sys.stderr,
     )
     raise typer.Exit(code=1)
 
@@ -54,7 +54,7 @@ def _run_axonctl(*args: str) -> None:
             cwd=REPO_DIR,
         )
     except FileNotFoundError:
-        console.print(f"[red]Could not execute {script}[/red]", file=sys.stderr)
+        err_console.print(f"[red]Could not execute {script}[/red]")
         raise typer.Exit(code=1)
     if proc.returncode != 0:
         raise typer.Exit(code=proc.returncode)
@@ -83,16 +83,14 @@ def config(
         list_config()
     elif action == "set":
         if not tier or not model:
-            console.print(
+            err_console.print(
                 "[red]Usage: axon config set <tier> --model <id>[/red]",
-                file=sys.stderr,
             )
             raise typer.Exit(code=1)
         set_tier_model(tier, model)
     else:
-        console.print(
+        err_console.print(
             f"[red]Unknown config action '{action}'.[/red] Use 'list' or 'set'.",
-            file=sys.stderr,
         )
         raise typer.Exit(code=1)
 
