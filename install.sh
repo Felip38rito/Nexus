@@ -5,10 +5,12 @@
 set -euo pipefail
 
 # --- Configuration ---
-STABLE_HOME="$HOME/.axon"
-REPO_URL="https://github.com/Felip38rito/Axon" # Adjust if different
+# Overridable via env for CI/testing: AXON_REPO_URL, AXON_STABLE_HOME.
+STABLE_HOME="${AXON_STABLE_HOME:-$HOME/.axon}"
+REPO_URL="${AXON_REPO_URL:-https://github.com/Felip38rito/Axon}"
 DEFAULT_PORT=9000
 PORT="$DEFAULT_PORT"
+NO_SERVICE=false
 
 # Colors
 log()  { echo -e "\033[1;32m[INFO]\033[0m $*"; }
@@ -27,8 +29,12 @@ parse_args() {
                 PORT="$2"
                 shift 2
                 ;;
+            --no-service)
+                NO_SERVICE=true
+                shift
+                ;;
             -h|--help)
-                echo "Usage: curl -LsSf https://.../install.sh | sh -s -- [--port N]"
+                echo "Usage: curl -LsSf https://.../install.sh | sh -s -- [--port N] [--no-service]"
                 exit 0
                 ;;
             *)
@@ -84,6 +90,10 @@ install_cli() {
 
 # Install the background service
 install_service() {
+    if $NO_SERVICE; then
+        log "Skipping service installation (--no-service)."
+        return
+    fi
     log "Installing background service on port $PORT..."
     # Use the axon CLI we just installed to trigger the service setup
     axon install --port "$PORT"
@@ -106,7 +116,7 @@ main() {
     echo " Stable Home: $STABLE_HOME"
     echo " Port:        $PORT"
     echo " CLI:         axon (available in your PATH)"
-    echo " Service:    Installed and running"
+    echo " Service:    $([ $NO_SERVICE = true ] && echo 'not installed (--no-service)' || echo 'installed and running')"
     echo
     echo " Usage:"
     echo "   axon status    - Check service status"
