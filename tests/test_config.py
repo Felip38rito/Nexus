@@ -104,6 +104,10 @@ def test_load_models_yaml_missing_tier_raises(tmp_path: Path):
 
 def test_settings_from_env_loads_yaml(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("ROUTER_MODELS_YAML", raising=False)
+    # Isolate Path.home so a real ~/.config/axon/config.yml can't interfere.
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
     yaml_path = tmp_path / "models.yaml"
     yaml_path.write_text(_sample_yaml())
     env = tmp_path / ".env"
@@ -294,35 +298,3 @@ def test_from_env_prefers_user_config_over_repo(monkeypatch, tmp_path: Path):
     s = Settings.from_env(tmp_path / ".env", default_models_yaml=repo_yaml)
     assert s.models.tiers[Tier.MINI].api_id == "user-mini"
 
-def test_from_env_prefers_user_config_over_repo(monkeypatch, tmp_path: Path):
-    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
-    monkeypatch.delenv("ROUTER_MODELS_YAML", raising=False)
-    
-    # Setup user config dir and file
-    user_config_dir = tmp_path / ".config" / "axon"
-    user_config_dir.mkdir(parents=True)
-    user_cfg = user_config_dir / "config.yml"
-    user_cfg.write_text(
-        "tiers:\n"
-        "  mini:\n    model: user-mini\n"
-        "  air:\n    model: user-air\n"
-        "  pro:\n    model: user-pro\n"
-        "  ultra:\n    model: user-ultra\n"
-    )
-    
-    # Mock Path.home to return the tmp_path
-    import pathlib
-    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
-    
-    # Repo default exists but must NOT win.
-    repo_yaml = tmp_path / "router.models.yaml"
-    repo_yaml.write_text(
-        "tiers:\n"
-        "  mini:\n    model: repo-mini\n"
-        "  air:\n    model: repo-air\n"
-        "  pro:\n    model: repo-pro\n"
-        "  ultra:\n    model: repo-ultra\n"
-    )
-    
-    s = Settings.from_env(tmp_path / ".env", default_models_yaml=repo_yaml)
-    assert s.models.tiers[Tier.MINI].api_id == "user-mini"
