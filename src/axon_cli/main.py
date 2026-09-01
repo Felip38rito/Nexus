@@ -24,7 +24,9 @@ app = typer.Typer(
 console = Console()
 
 # Repo root: src/axon_cli/main.py -> src -> repo root.
-REPO_DIR = Path(__file__).resolve().parents[2]
+# Prefer stable home (~/.axon), fallback to local repo structure.
+STABLE_HOME = Path.home() / ".axon"
+REPO_DIR = STABLE_HOME if STABLE_HOME.exists() else Path(__file__).resolve().parents[2]
 AXONCTL = REPO_DIR / "axonctl.sh"
 
 
@@ -99,6 +101,20 @@ def config(
 def start() -> None:
     """Start the Axon router service."""
     _run_axonctl("start")
+
+
+@app.command()
+def install(
+    port: int = typer.Option(9000, "--port", "-p", help="Port to run the router on"),
+) -> None:
+    """Generate the service config and load it (start at login)."""
+    _run_axonctl("install", "--port", str(port))
+
+
+@app.command()
+def uninstall() -> None:
+    """Stop and remove the service config."""
+    _run_axonctl("uninstall")
 
 
 @app.command()
