@@ -13,3 +13,6 @@ build/
 dist/
 *.egg-info/
 src/*.egg-info/
+.coverage
+coverage.dat
+.coverage.abc
