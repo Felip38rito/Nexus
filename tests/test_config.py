@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from model_router.config import Settings, load_models_yaml
-from model_router.models import MODEL_TABLE, Tier, tier_for_api_id
+from model_router.models import MODEL_TABLE, Tier, tier_for_api_id, ModelSpec
 
 
 def test_tier_table_has_all_tiers():
@@ -104,6 +104,10 @@ def test_load_models_yaml_missing_tier_raises(tmp_path: Path):
 
 def test_settings_from_env_loads_yaml(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("ROUTER_MODELS_YAML", raising=False)
+    # Isolate Path.home so a real ~/.config/axon/config.yml can't interfere.
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
     yaml_path = tmp_path / "models.yaml"
     yaml_path.write_text(_sample_yaml())
     env = tmp_path / ".env"
@@ -193,3 +197,104 @@ def test_load_models_yaml_provider_requires_base_url(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="must define a 'base_url'"):
         load_models_yaml(yaml_path)
+
+
+def test_modelspec_name_defaults_to_none():
+    from model_router.models import ModelSpec
+    spec = ModelSpec(api_id="gemma4:31b", description="x")
+    assert spec.name is None
+
+
+def test_load_models_yaml_name_and_default_description(tmp_path: Path):
+    yaml_path = tmp_path / "models.yaml"
+    yaml_path.write_text(
+        "tiers:\n"
+        "  mini:\n    model: gemma4:31b\n    name: Fast\n"
+        "  air:\n    model: deepseek-v4-flash:0731\n"
+        "  pro:\n    model: deepseek-v4-pro:0813\n"
+        "  ultra:\n    model: kimi-k3\n"
+    )
+    models = load_models_yaml(yaml_path)
+    assert models is not None
+    # name parsed
+    assert models.tiers[Tier.MINI].name == "Fast"
+    # air omitted description -> falls back to built-in default (non-empty)
+    assert models.tiers[Tier.AIR].description  # truthy
+    assert models.tiers[Tier.AIR].name is None
+
+
+def test_load_models_yaml_extra_params(tmp_path: Path):
+    yaml_path = tmp_path / "models.yaml"
+    yaml_path.write_text(
+        "tiers:\n"
+        "  mini:\n    model: gemma4:31b\n"
+        "  air:\n    model: deepseek-v4-flash:0731\n"
+        "    extra_params:\n"
+        "      reasoning_effort: high\n"
+        "      budget_tokens: 4096\n"
+        "  pro:\n    model: deepseek-v4-pro:0813\n"
+        "  ultra:\n    model: kimi-k3\n"
+    )
+    models = load_models_yaml(yaml_path)
+    assert models is not None
+    # extra_params parsed for the air tier
+    assert models.tiers[Tier.AIR].extra_params == {
+        "reasoning_effort": "high",
+        "budget_tokens": 4096,
+    }
+    # tiers without extra_params default to empty dict
+    assert models.tiers[Tier.MINI].extra_params == {}
+
+
+def test_load_models_yaml_extra_params_must_be_mapping(tmp_path: Path):
+    yaml_path = tmp_path / "models.yaml"
+    yaml_path.write_text(
+        "tiers:\n"
+        "  mini:\n    model: gemma4:31b\n"
+        "  air:\n    model: deepseek-v4-flash:0731\n"
+        "    extra_params: not-a-mapping\n"
+        "  pro:\n    model: deepseek-v4-pro:0813\n"
+        "  ultra:\n    model: kimi-k3\n"
+    )
+    with pytest.raises(ValueError, match="extra_params for tier 'air' must be a mapping"):
+        load_models_yaml(yaml_path)
+
+
+def test_modelspec_name_defaults_to_none():
+    from model_router.models import ModelSpec
+    spec = ModelSpec(api_id="gemma4:31b", description="x")
+    assert spec.name is None
+
+def test_from_env_prefers_user_config_over_repo(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("ROUTER_MODELS_YAML", raising=False)
+    
+    # Setup user config dir and file
+    user_config_dir = tmp_path / ".config" / "axon"
+    user_config_dir.mkdir(parents=True)
+    user_cfg = user_config_dir / "config.yml"
+    user_cfg.write_text(
+        "tiers:\n"
+        "  mini:\n    model: user-mini\n"
+        "  air:\n    model: user-air\n"
+        "  pro:\n    model: user-pro\n"
+        "  ultra:\n    model: user-ultra\n"
+    )
+    
+    # Mock Path.home to return the tmp_path
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    
+    # Repo default exists but must NOT win.
+    repo_yaml = tmp_path / "router.models.yaml"
+    repo_yaml.write_text(
+        "tiers:\n"
+        "  mini:\n    model: repo-mini\n"
+        "  air:\n    model: repo-air\n"
+        "  pro:\n    model: repo-pro\n"
+        "  ultra:\n    model: repo-ultra\n"
+    )
+    
+    s = Settings.from_env(tmp_path / ".env", default_models_yaml=repo_yaml)
+    assert s.models.tiers[Tier.MINI].api_id == "user-mini"
+

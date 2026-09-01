@@ -94,15 +94,22 @@ def deterministic_tier(prompt: str, min_classify_len: int = 10, models: RouterMo
     return None
 
 
-LLM_SYSTEM = """You are a model router. Pick the most appropriate Ollama Cloud model tier for the user's request.
+def build_llm_system(models: "RouterModels") -> str:
+    """Build the classifier system prompt from the tier table.
 
-Reply with ONLY a single JSON object, no commentary, of the form {"model": "mini|air|pro|ultra", "reason": "<short>"}.
+    The escalation axis and output format are fixed; only the per-tier
+    descriptions are injected from the config (customized or default), so a
+    reconfiguration is honored automatically without drifting out of sync.
+    """
+    tier_lines = "\n".join(
+        f"- {tier.value} = {models.tiers[tier].description}" for tier in Tier
+    )
+    return f"""You are a model router. Pick the most appropriate model tier for the user's request.
+
+Reply with ONLY a single JSON object, no commentary, of the form {{"model": "<tier>", "reason": "<short>"}}.
 
 Tier definitions:
-- mini  = general assistance, discussions, basic reasoning, and straightforward single-file code edits or mechanical updates.
-- air   = the primary implementer: standard feature development, implementing logic across multiple files, and routine integrations where the path is clear.
-- pro   = high-cognitive tasks where the solution path is NOT clear: deep root-cause analysis (race conditions, memory leaks), complex architectural redesigns, high-level API strategy, and critical security audits.
-- ultra = maximum reasoning depth: whole-project or systemic synthesis, adversarial analysis, reverse engineering, or solving theoretical or "impossible" problems.
+{tier_lines}
 
 Decide by what EXECUTING the request requires, using this escalation axis:
 1. mini -> air: file scope. Single-file/mechanical work stays in mini; multi-file features and routine integrations move to air.
@@ -110,14 +117,10 @@ Decide by what EXECUTING the request requires, using this escalation axis:
 3. pro -> ultra: scope. A hard but contained problem stays in pro; only whole-system synthesis or "impossible" problems reach ultra.
 
 Examples:
-{"model": "mini", "reason": "simple greeting"}
-{"model": "mini", "reason": "straightforward single-file edit"}
-{"model": "air", "reason": "implementing a feature across multiple files"}
-{"model": "air", "reason": "routine integration with a clear path"}
-{"model": "pro", "reason": "deep debugging, root-cause analysis required"}
-{"model": "pro", "reason": "complex architectural redesign, unclear solution path"}
-{"model": "ultra", "reason": "whole-codebase refactor, deep synthesis required"}
-{"model": "ultra", "reason": "reverse engineering or solving an impossible problem"}"""
+{{"model": "mini", "reason": "simple greeting"}}
+{{"model": "air", "reason": "implementing a feature across multiple files"}}
+{{"model": "pro", "reason": "deep debugging, root-cause analysis required"}}
+{{"model": "ultra", "reason": "whole-codebase refactor, deep synthesis required"}}"""
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -146,13 +149,14 @@ async def _classify_once(
     base_url: str,
     classifier_model: str,
     prompt: str,
+    system_prompt: str,
     client: httpx.AsyncClient,
 ) -> httpx.Response:
     """Issue a single classifier request to the upstream."""
     body = {
         "model": classifier_model,
         "messages": [
-            {"role": "system", "content": LLM_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt[:4000]},
         ],
         "temperature": 0,
@@ -227,6 +231,7 @@ def _parse_tier_response(resp: httpx.Response) -> Tier | None:
 
 async def llm_tier(
     prompt: str,
+    models: "RouterModels",
     *,
     api_key: str,
     base_url: str = "https://ollama.com/v1",
@@ -256,6 +261,7 @@ async def llm_tier(
                     base_url=base_url,
                     classifier_model=classifier_model,
                     prompt=prompt,
+                    system_prompt=build_llm_system(models),
                     client=client,
                 )
                 if resp.status_code in _RETRY_STATUS:
@@ -303,7 +309,8 @@ async def classify(
     classifier_provider = settings.models.provider_for(settings.models.classifier_provider)
     llm = await llm_tier(
         prompt,
-        api_key=classifier_provider.resolve_api_key(),
+        models=settings.models,
+        api_key=classifier_provider.resolve_api_key(fallback=settings.ollama_api_key),
         base_url=classifier_provider.base_url,
         classifier_model=settings.models.classifier_model,
         client=client,

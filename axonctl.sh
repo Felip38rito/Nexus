@@ -138,6 +138,18 @@ _mac_stop() {
     fi
 }
 
+_mac_restart() {
+    # kickstart -k kills and restarts atomically, avoiding the stop/start
+    # race where `launchctl list` still shows the label right after bootout.
+    if launchctl list "$LABEL" &>/dev/null; then
+        echo "🔄 Restarting Axon (launchd)..."
+        launchctl kickstart -k "$DOMAIN/$LABEL"
+    else
+        echo "🚀 Axon not running — starting it..."
+        launchctl bootstrap "$DOMAIN" "$PLIST"
+    fi
+}
+
 _mac_status() {
     if launchctl list "$LABEL" &>/dev/null; then
         echo "🔍 Axon is running (label $LABEL):"
@@ -251,7 +263,7 @@ case "$CMD" in
         if [ "$BACKEND" = "launchd" ]; then _mac_stop; else _lin_stop; fi
         ;;
     restart)
-        if [ "$BACKEND" = "launchd" ]; then _mac_stop; _mac_start; else _lin_stop; _lin_start; fi
+        if [ "$BACKEND" = "launchd" ]; then _mac_restart; else _lin_stop; _lin_start; fi
         ;;
     status)
         if [ "$BACKEND" = "launchd" ]; then _mac_status; else _lin_status; fi

@@ -1,0 +1,26 @@
+name: Update Stable Tag
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-stable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+      - name: Update stable tag
+        run: |
+          # Get the tag of the current release
+          RELEASE_TAG=${{ github.event.release.tag_name }}
+          echo "Updating stable tag to point to $RELEASE_TAG"
+          
+          # Force the 'stable' tag to point to the release commit
+          git tag -f stable $RELEASE_TAG
+          git push origin stable --force

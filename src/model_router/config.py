@@ -16,6 +16,7 @@ from .models import (
     ProviderSpec,
     RouterModels,
     Tier,
+    _DEFAULT_TABLE,
 )
 
 
@@ -63,7 +64,7 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
                 raise ValueError(f"Provider '{name}' must define a 'base_url'")
             providers[str(name)] = ProviderSpec(
                 base_url=str(pcfg["base_url"]).rstrip("/"),
-                api_key=str(pcfg.get("api_key")),
+                api_key=str(pcfg["api_key"]) if pcfg.get("api_key") else None,
                 api_key_env=str(pcfg.get("api_key_env", "OLLAMA_API_KEY")) if "api_key_env" in pcfg else None,
             )
         # Always ensure a "default" provider exists so tiers that don't specify
@@ -87,10 +88,15 @@ def load_models_yaml(path: Path | None) -> RouterModels | None:
             raise ValueError(
                 f"Tier '{tier_key}' references unknown provider '{provider}' in {path}"
             )
+        extra_params = spec.get("extra_params", {})
+        if not isinstance(extra_params, dict):
+            raise ValueError(f"extra_params for tier '{tier_key}' must be a mapping")
         tiers[tier] = ModelSpec(
             api_id=str(spec["model"]),
-            description=str(spec.get("description", "")),
+            description=str(spec.get("description", _DEFAULT_TABLE[tier].description)),
             provider=provider,
+            name=str(spec["name"]) if spec.get("name") else None,
+            extra_params=extra_params,
         )
 
     # Require all four tiers.
@@ -151,13 +157,19 @@ class Settings:
         key = os.environ.get("OLLAMA_API_KEY", "").strip()
         require_auth = os.environ.get("ROUTER_API_KEY", "").strip()
 
-        # Load models YAML: explicit ROUTER_MODELS_YAML wins, else the default
-        # project file, else built-in defaults.
+        # Load models YAML: explicit ROUTER_MODELS_YAML wins, else the
+        # user config in ~/.config/axon/config.yml, else the project
+        # default file, else built-in defaults.
         yaml_path_raw = os.environ.get("ROUTER_MODELS_YAML", "").strip()
         if yaml_path_raw:
             yaml_path: Path | None = Path(yaml_path_raw)
         else:
-            yaml_path = default_models_yaml
+            user_cfg = Path.home() / ".config" / "axon" / "config.yml"
+            if user_cfg.exists():
+                yaml_path = user_cfg
+            else:
+                yaml_path = default_models_yaml
+        
         models = load_models_yaml(yaml_path) or RouterModels()
 
         return cls(

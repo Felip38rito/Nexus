@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Run tests
+        run: uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=80 -q
+
+  install-validation:
+    name: Install validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: bash -n install.sh
+
+      - name: Install via script (no service)
+        # AXON_REPO_URL points at the checked-out PR, not the live repo.
+        # AXON_STABLE_HOME uses a temp dir so we don't touch the real ~/.axon.
+        env:
+          AXON_REPO_URL: file://${{ github.workspace }}
+          AXON_STABLE_HOME: ${{ runner.temp }}/axon-home/.axon
+        run: |
+          bash install.sh --no-service --port 9999
+
+      - name: Verify CLI binary
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          axon version
+          axon --help
+
+      - name: Smoke test the router
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          # Start the router in the foreground, then probe /v1/models.
+          (cd "${{ github.workspace }}" && uv run uvicorn model_router.main:app \
+            --host 127.0.0.1 --port 9999 >/tmp/axon-smoke.log 2>&1) &
+          ROUTER_PID=$!
+          # Wait for the endpoint to come up (max ~15s).
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9999/v1/models >/tmp/axon-models.json 2>/dev/null; then
+              break
+            fi
+            sleep 0.5
+          done
+          # Assert the 5 tiers are advertised.
+          python3 - <<'PY'
+          import json
+          data = json.load(open("/tmp/axon-models.json"))
+          ids = {m["id"] for m in data["data"]}
+          expected = {"adaptive", "mini", "air", "pro", "ultra"}
+          assert expected.issubset(ids), f"missing tiers: {expected - ids}"
+          print(f"OK: {len(ids)} models advertised, all 5 tiers present")
+          PY
+          kill $ROUTER_PID 2>/dev/null || true

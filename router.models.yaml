@@ -28,8 +28,9 @@ providers:
   #   base_url: https://generativelanguage.googleapis.com/v1beta
   #   api_key_env: GEMINI_API_KEY
 
-# Tiers fixos (mini/air/pro/ultra). Cada tier tem o modelo, uma descrição e,
-# opcionalmente, o provider que o serve (default: "default").
+# Opcional: name = alias de exibição/roteamento (aparece no /v1/models).
+# Opcional: description = override do prompt do classificador para este tier.
+#   Se ausente, usa a descrição embutida.
 tiers:
   mini:
     model: gemma4:31b

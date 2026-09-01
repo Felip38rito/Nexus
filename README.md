@@ -57,30 +57,106 @@ answer quality, without wasting tokens on prompts that don't need it.
 
 ## Requirements
 
-- Python ≥ 3.11 via [`uv`](https://docs.astral.sh/uv/).
+- **macOS or Linux** (the installer auto-detects the OS and uses the native
+  service manager: `launchd` on macOS, `systemd` on Linux).
+- `curl` and `git` (both preinstalled on macOS and most Linux distros).
 - An upstream provider API key (e.g. `OLLAMA_API_KEY`).
+
+> `uv` is **not** required up front — the installer bootstraps it for you if
+> it's missing.
 
 ## Quick start
 
-```bash
-git clone <your-repo> && cd model-router
-uv sync --extra dev
-cp .env.example .env        # fill in your provider key
-PYTHONPATH=src uv run uvicorn model_router.main:app --host 127.0.0.1 --port 9000
-```
-
-Or run it as a background service with `axonctl` (see
-[Running as a service](#running-as-a-service-launchd--macos)):
+Install Axon with a single command (works on macOS and Linux):
 
 ```bash
-export PATH="$PATH:$PWD"    # make axonctl available
-axonctl install            # generate plist + start at login
+curl -LsSf https://<your-host>/install.sh | sh
 ```
+
+The installer:
+
+1. Bootstraps `uv` if needed.
+2. Clones the repo into the **stable home** `~/.axon`.
+3. Installs the `axon` CLI globally via `uv tool install` (a real binary in
+   `~/.local/bin` — no PATH hacks).
+4. Installs the background service so the router starts at login.
+
+Then configure your provider and start:
+
+```bash
+axon setup        # interactive: provider, tiers, reasoning levels
+axon status       # is the router running?
+curl localhost:9000/v1/models
+```
+
+> **Development / from source:** if you already have the repo cloned, you can
+> run it directly with `uv sync --extra dev` and
+> `PYTHONPATH=src uv run uvicorn model_router.main:app --host 127.0.0.1 --port 9000`,
+> or install the CLI in place with `uv tool install .`.
 
 Tests:
 
 ```bash
 uv run pytest
+```
+
+## Using the Axon CLI
+
+`axon` is a modern CLI for managing the router: guided setup, service
+lifecycle, and config management. It wraps `axonctl.sh` for service commands.
+
+After installing via the script, `axon` is a real binary on your `PATH`
+(installed to `~/.local/bin` by `uv tool install`), so it works from any
+directory:
+
+```bash
+axon version     # confirm it's installed
+```
+
+### Guided setup
+
+The first step is usually `axon setup`, which walks you through configuring
+providers, tiers, and reasoning levels interactively:
+
+```bash
+axon setup
+```
+
+It asks for:
+
+1. **Provider** — name, `base_url`, and the env var holding the API key.
+2. **Tiers** — either *Axon Omakase* (recommended defaults) or custom display
+   names, plus the model id for each tier (`mini`/`air`/`pro`/`ultra`).
+3. **Reasoning levels** — optionally attach `extra_params` (e.g.
+   `reasoning_effort: high`) to specific tiers.
+
+The result is written to `~/.config/axon/config.yml`, which the router reads
+automatically.
+
+### Service lifecycle
+
+```bash
+axon start      # start the router service
+axon stop       # stop it
+axon restart    # restart it
+axon status     # is it running?
+axon logs       # last 100 lines of logs
+axon tail       # follow logs live
+```
+
+### Config management
+
+```bash
+axon config list                 # show tier -> name -> model -> provider
+axon config set pro --model <id> # change a tier's model id
+```
+
+### Example
+
+```bash
+axon setup                       # configure providers + tiers
+axon start                       # launch the router
+curl localhost:9000/v1/models    # custom names appear here
 ```
 
 ## Environment configuration
@@ -103,8 +179,12 @@ uv run pytest
 
 ## Model configuration (YAML)
 
-The 4 tiers are fixed; the models, their providers, and the classifier are all
-configured in `router.models.yaml` (or another file via `ROUTER_MODELS_YAML`).
+Each tier accepts two optional fields:
+- `name`: a display/route alias shown in `/v1/models` (e.g. `Fast`). If unset, the tier key is used. The classifier always uses the internal key.
+- `description`: overrides the classifier's system prompt for that tier. If unset, the built-in description is used.
+- `extra_params`: a mapping of provider-specific parameters (e.g. `reasoning_effort`, `budget_tokens`) merged into the upstream request body for that tier.
+
+Config is resolved from (first match): `ROUTER_MODELS_YAML` env var, `~/.config/axon/config.yml`, `router.models.yaml` in the repo, then built-in defaults.
 
 ```yaml
 default_tier: air
@@ -131,6 +211,8 @@ tiers:
     model: deepseek-v4-pro:0813
     description: "raw coding power"
     # provider: gemini        # optional — defaults to "default"
+    # extra_params:           # optional — merged into the upstream request
+    #   reasoning_effort: high
   ultra:
     model: kimi-k3
     description: "deep synthesis, whole-architecture"
@@ -499,18 +581,18 @@ Add a `router` provider in `~/.config/opencode/opencode.jsonc`:
 
 To have the router start at login and restart itself on crash, use a background
 service. The `axonctl` script manages the whole lifecycle and **self-locates**
-— it derives the repo path from its own location, so you can drop the repo
-folder anywhere and add it to your `PATH`:
+— it derives the repo path from its own location, so it works whether you
+installed via the script (repo in `~/.axon`) or cloned it manually.
+
+After a script install, the service is already set up. You can manage it with
+either the `axon` CLI or `axonctl` directly:
 
 ```bash
-# add the repo folder to your PATH (e.g. in ~/.zshrc)
-export PATH="$PATH:$HOME/Developer/model-router"
-
-axonctl install     # generate the service config + load it
-axonctl status      # is it running?
-axonctl restart      # after changing code/config
-axonctl tail        # follow logs live
-axonctl uninstall   # stop + remove the service config
+axon install       # generate the service config + load it (start at login)
+axon status        # is it running?
+axon restart       # after changing code/config
+axon tail          # follow logs live
+axon uninstall     # stop + remove the service config
 ```
 
 Commands: `install | uninstall | start | stop | restart | status | logs | tail`.

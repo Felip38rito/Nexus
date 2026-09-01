@@ -368,3 +368,210 @@ def test_multi_provider_routes_to_correct_endpoint(tmp_path, monkeypatch):
     # The request must go to the gemini provider's endpoint, not ollama.
     assert seen["url"] == "https://generativelanguage.googleapis.com/v1beta/chat/completions"
     assert r.headers["X-Router-Tier"] == "pro"
+
+def test_models_payload_uses_custom_name():
+    from model_router.models import RouterModels, ModelSpec, Tier
+    from model_router.proxy import _model_list_payload
+
+    models = RouterModels(
+        tiers={
+            Tier.MINI: ModelSpec("gemma4:31b", "d", name="Fast"),
+            Tier.AIR: ModelSpec("deepseek-v4-flash:0731", "d"),
+            Tier.PRO: ModelSpec("deepseek-v4-pro:0813", "d"),
+            Tier.ULTRA: ModelSpec("kimi-k3", "d"),
+        }
+    )
+    payload = _model_list_payload(models)
+    ids = [m["id"] for m in payload["data"]]
+    assert "Fast" in ids          # custom name advertised
+    assert "mini" not in ids      # key replaced by name
+    assert "air" in ids           # no name -> key used
+    # internal tier key preserved
+    fast = next(m for m in payload["data"] if m["id"] == "Fast")
+    assert fast["tier"] == "mini"
+
+
+def test_extra_params_merged_into_upstream_body(client: TestClient, monkeypatch):
+    """A tier with extra_params must have those params present in the upstream body."""
+    from model_router.models import RouterModels, ModelSpec, Tier
+
+    models = RouterModels(
+        tiers={
+            Tier.MINI: ModelSpec("gemma4:31b", "d"),
+            Tier.AIR: ModelSpec(
+                "deepseek-v4-flash:0731",
+                "d",
+                extra_params={"reasoning_effort": "high", "budget_tokens": 4096},
+            ),
+            Tier.PRO: ModelSpec("deepseek-v4-pro:0813", "d"),
+            Tier.ULTRA: ModelSpec("kimi-k3", "d"),
+        }
+    )
+    settings = Settings(
+        ollama_api_key="upstream-key",
+        ollama_base_url="https://ollama.com/v1",
+        models=models,
+    )
+    client = TestClient(_make_app(settings))
+
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        seen["body"] = kw["json"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    # Force the air tier (which carries extra_params) via a tier-name override.
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "air", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 200
+    assert seen["body"]["model"] == "deepseek-v4-flash:0731"
+    # extra_params merged into the upstream request body
+    assert seen["body"]["reasoning_effort"] == "high"
+    assert seen["body"]["budget_tokens"] == 4096
+
+
+# --- Additional coverage: content-as-parts, fallback, errors, responses shim ---
+
+def test_content_as_text_parts_routes(client: TestClient, monkeypatch):
+    """A user message with content as a list of text parts is classified."""
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        seen["model"] = kw["json"]["model"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    payload = {
+        "model": "adaptive",
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "image_url", "image_url": {"url": "x"}},
+                ],
+            }
+        ],
+    }
+    r = client.post("/v1/chat/completions", json=payload)
+    assert r.status_code == 200
+    # "hi" is trivial -> mini
+    assert seen["model"] == "gemma4:31b"
+    assert r.headers["X-Router-Tier"] == "mini"
+
+
+def test_no_user_message_falls_back_to_concat(client: TestClient, monkeypatch):
+    """When no user message exists, all string contents are concatenated."""
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        seen["model"] = kw["json"]["model"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    payload = {
+        "model": "adaptive",
+        "messages": [
+            {"role": "system", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ],
+    }
+    r = client.post("/v1/chat/completions", json=payload)
+    assert r.status_code == 200
+    # concatenated "hi\nhello" is short -> mini
+    assert seen["model"] == "gemma4:31b"
+
+
+def test_upstream_httperror_maps_to_502(client: TestClient, monkeypatch):
+    async def fake_post(self, url, headers, **kw):
+        raise httpx.ConnectError("boom", request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "x", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert r.status_code == 502
+
+
+def test_invalid_json_body_400(client: TestClient):
+    r = client.post("/v1/chat/completions", content="not-json", headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+
+
+def test_responses_shim_translates_and_routes(client: TestClient, monkeypatch):
+    """/v1/responses translates instructions+input into chat messages and routes."""
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        seen["body"] = kw["json"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    payload = {
+        "model": "adaptive",
+        "instructions": "You are a helpful assistant.",
+        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
+        "tools": [{"type": "function", "name": "get_weather", "description": "w", "parameters": {"type": "object"}}],
+        "parallel_tool_calls": True,
+        "stream": True,
+    }
+    r = client.post("/v1/responses", json=payload)
+    assert r.status_code == 200
+    # instructions -> system message
+    assert seen["body"]["messages"][0] == {"role": "system", "content": "You are a helpful assistant."}
+    # input translated to a user message
+    assert seen["body"]["messages"][1]["role"] == "user"
+    # tools translated to nested format
+    assert isinstance(seen["body"]["tools"], list)
+    # parallel_tool_calls passed through
+    assert seen["body"]["parallel_tool_calls"] is True
+    # stream_options include_usage added for metering
+    assert seen["body"]["stream_options"] == {"include_usage": True}
+
+
+def test_responses_shim_accepts_messages_directly(client: TestClient, monkeypatch):
+    """/v1/responses also accepts a plain 'messages' list."""
+    seen = {}
+
+    async def fake_post(self, url, headers, **kw):
+        seen["body"] = kw["json"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    payload = {
+        "model": "adaptive",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    r = client.post("/v1/responses", json=payload)
+    assert r.status_code == 200
+    assert seen["body"]["messages"] == [{"role": "user", "content": "hi"}]
+
+
+def test_responses_shim_invalid_json_400(client: TestClient):
+    r = client.post("/v1/responses", content="nope", headers={"Content-Type": "application/json"})
+    assert r.status_code == 400

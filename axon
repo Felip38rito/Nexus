@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# axon — CLI for managing the Axon Model Router.
+# Self-locating: derives the repo path from its own location.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="${PYTHONPATH:-}:$SCRIPT_DIR/src"
+exec uv run python -m axon_cli.main "$@"
