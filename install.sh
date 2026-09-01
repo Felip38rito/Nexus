@@ -5,9 +5,10 @@
 set -euo pipefail
 
 # --- Configuration ---
-# Overridable via env for CI/testing: AXON_REPO_URL, AXON_STABLE_HOME.
+# Overridable via env for CI/testing: AXON_REPO_URL, AXON_STABLE_HOME, AXON_REF.
 STABLE_HOME="${AXON_STABLE_HOME:-$HOME/.axon}"
 REPO_URL="${AXON_REPO_URL:-https://github.com/Felip38rito/Axon}"
+AXON_REF="${AXON_REF:-stable}"
 DEFAULT_PORT=9000
 PORT="$DEFAULT_PORT"
 NO_SERVICE=false
@@ -75,10 +76,16 @@ ensure_uv() {
 setup_repo() {
     if [ -d "$STABLE_HOME/.git" ]; then
         log "Axon already exists in $STABLE_HOME. Updating..."
-        (cd "$STABLE_HOME" && git pull)
+        (cd "$STABLE_HOME" && git fetch --tags && git checkout "$AXON_REF")
     else
-        log "Cloning Axon to $STABLE_HOME..."
-        git clone "$REPO_URL" "$STABLE_HOME"
+        log "Cloning Axon ($AXON_REF) to $STABLE_HOME..."
+        # If REPO_URL is a local file path (CI mode), we clone without specifying a branch
+        # to avoid errors if the tag 'stable' doesn't exist in the temp dir.
+        if [[ "$REPO_URL" == file://* ]]; then
+            git clone "$REPO_URL" "$STABLE_HOME"
+        else
+            git clone -b "$AXON_REF" "$REPO_URL" "$STABLE_HOME"
+        fi
     fi
 }
 
