@@ -26,16 +26,12 @@ TIER_ROLES: dict[Tier, str] = {
     Tier.ULTRA: "systemic synthesis / hardest problems — whole-architecture",
 }
 
-DEFAULT_MODELS: dict[Tier, str] = {
+EXAMPLE_MODELS: dict[Tier, str] = {
     Tier.MINI: "gemma4:31b",
     Tier.AIR: "deepseek-v4-flash:0731",
     Tier.PRO: "deepseek-v4-pro:0813",
     Tier.ULTRA: "kimi-k3",
 }
-
-DEFAULT_PROVIDER = "default"
-DEFAULT_BASE_URL = "https://ollama.com/v1"
-DEFAULT_API_KEY_ENV = "OLLAMA_API_KEY"
 
 
 def config_path() -> Path:
@@ -57,14 +53,35 @@ def _print_roles() -> None:
     )
 
 
+def _required_prompt(prompt: str) -> str:
+    """Prompt until the user provides a non-empty value (no blank allowed)."""
+    while True:
+        value = Prompt.ask(prompt)
+        if value.strip():
+            return value.strip()
+        console.print("[red]Value cannot be empty. Please enter a value.[/red]")
+
+
 def _prompt_provider() -> dict[str, Any]:
-    """Collect provider configuration from the user."""
+    """Collect provider configuration from the user (required, no defaults)."""
     console.print(Panel("Provider configuration", border_style="cyan"))
-    name = Prompt.ask("Provider name", default="default")
-    base_url = Prompt.ask("base_url", default=DEFAULT_BASE_URL)
-    api_key_env = Prompt.ask(
-        "Environment variable holding the API key",
-        default=DEFAULT_API_KEY_ENV,
+    name = _required_prompt("Provider name")
+    base_url = _required_prompt("base_url (e.g. https://ollama.com/v1)")
+
+    # Let the user provide the key inline or via an env var.
+    use_inline = Confirm.ask(
+        "Provide the API key directly (inline) instead of an env var?",
+        default=False,
+    )
+    if use_inline:
+        api_key = _required_prompt("API key")
+        return {
+            "name": name,
+            "base_url": base_url.rstrip("/"),
+            "api_key": api_key,
+        }
+    api_key_env = _required_prompt(
+        "Environment variable holding the API key (e.g. OLLAMA_API_KEY)"
     )
     return {
         "name": name,
@@ -77,7 +94,7 @@ def _prompt_tiers() -> dict[Tier, dict[str, Any]]:
     """Collect tier names and model ids (Omakase vs Custom flow)."""
     _print_roles()
     omakase = Confirm.ask(
-        "Use Axon Omakase (recommended defaults) or Custom Names?",
+        "Use Axon Omakase (author's recommended defaults)?",
         default=True,
     )
 
@@ -92,9 +109,10 @@ def _prompt_tiers() -> dict[Tier, dict[str, Any]]:
                 f"Display name for tier [bold]{tier.value}[/bold] ({TIER_ROLES[tier]})",
                 default=tier.value,
             )
-        entry["model"] = Prompt.ask(
-            f"Model id for [bold]{tier.value}[/bold]",
-            default=DEFAULT_MODELS[tier],
+        # The model id is always required — the Omakase value is only an
+        # example (Ollama Cloud) shown as a suggestion, never applied blindly.
+        entry["model"] = _required_prompt(
+            f"Model id for [bold]{tier.value}[/bold] (e.g. {EXAMPLE_MODELS[tier]})",
         )
         tiers[tier] = entry
     return tiers
@@ -142,12 +160,14 @@ def _build_config(
 ) -> dict[str, Any]:
     """Assemble the full config dict from the collected answers."""
     provider_name = provider["name"]
-    providers = {
-        provider_name: {
-            "base_url": provider["base_url"],
-            "api_key_env": provider["api_key_env"],
-        }
+    provider_spec: dict[str, Any] = {
+        "base_url": provider["base_url"],
     }
+    if provider.get("api_key"):
+        provider_spec["api_key"] = provider["api_key"]
+    else:
+        provider_spec["api_key_env"] = provider["api_key_env"]
+    providers = {provider_name: provider_spec}
 
     tier_cfg: dict[str, Any] = {}
     for tier in Tier:
